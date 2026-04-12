@@ -99,17 +99,6 @@ It creates proper `.desktop` entries so installed apps appear in your system men
 ```bash
 ./build_appimage.sh
 ```
-
----
-
-### Windows EXE
-
-Use PyInstaller:
-
-```bash
-pyinstaller --onefile --windowed app.py
-```
-
 ---
 
 ## 🤝 Contributing
