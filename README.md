@@ -131,3 +131,13 @@ Forester • Developer • GIS Analyst
 ## ⭐ Support
 
 If you find this useful, give it a ⭐ on GitHub!
+
+### 💸 Donate via PayPal
+👉 https://www.paypal.com/ncp/payment/UW7ASFGBX48WN
+
+Your support helps:
+- 🚀 Improve features
+- 🐛 Fix bugs faster
+- 📦 Maintain cross-platform builds
+
+---
