@@ -1,0 +1,8 @@
+[Desktop Entry]
+Type=Application
+Name=Linux App Installer
+Exec=LinuxAppInstaller
+Icon=linux-app-installer
+Categories=Utility;
+Comment=Install and manage AppImage and DEB packages
+Terminal=false
