@@ -28,7 +28,10 @@ Built with Python (Tkinter), this tool provides a clean interface for handling p
 
 ## 📸 Screenshot
 
-> ![Main UI](screenshots/install-app.png)
+### Install .appImage or .deb
+![Main UI](screenshots/install-app.png)
+
+### Uninstall Apps
 > ![Main UI](screenshots/uninstall-apps.png)
 
 ---
