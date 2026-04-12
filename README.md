@@ -28,7 +28,8 @@ Built with Python (Tkinter), this tool provides a clean interface for handling p
 
 ## 📸 Screenshot
 
-> *(Add a screenshot here later)*
+> ![Main UI](screenshots/install-app.png)
+> ![Main UI](screenshots/uninstall-apps.png)
 
 ---
 
