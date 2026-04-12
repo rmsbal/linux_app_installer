@@ -1,3 +1,7 @@
 {
-    "editor.fontSize": 16
+    "editor.fontSize": 16,
+    "workbench.activityBar.autoHide": false,
+    "workbench.activityBar.compact": false,
+    "workbench.colorTheme": "Dark 2026",
+    "workbench.iconTheme": "vs-seti"
 }

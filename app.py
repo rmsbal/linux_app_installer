@@ -1,3 +1,4 @@
+import json
 import os
 import re
 import sys
@@ -6,41 +7,76 @@ import shutil
 import tempfile
 import subprocess
 import tkinter as tk
-from tkinter import filedialog, messagebox
+from tkinter import filedialog, messagebox, ttk
 
 APP_TITLE = "Linux App Installer"
-APP_COMMENT = "Open and install AppImage and DEB packages"
+APP_COMMENT = "Install, manage, and uninstall AppImage and DEB packages"
 APP_CATEGORIES = "Utility;System;"
 INSTALL_DIR = os.path.expanduser("~/Applications")
 DESKTOP_DIR = os.path.expanduser("~/.local/share/applications")
 ICON_DIR = os.path.expanduser("~/.local/share/icons")
+APP_STATE_DIR = os.path.expanduser("~/.local/share/linux-app-installer")
+MANIFEST_FILE = os.path.join(APP_STATE_DIR, "installed_appimages.json")
 DESKTOP_FILE_NAME = "linux-app-installer.desktop"
 
 APPIMAGE_MIME = "application/x-iso9660-appimage"
 DEB_MIME = "application/vnd.debian.binary-package"
 
-# Put your Linux Installer icon here
-INSTALLER_ICON_PATH = "Linux_installer_icon.png"
+# Change this to your real icon path
+INSTALLER_ICON_PATH = "/home/mark/Pictures/Linux_installer_icon.png"
 
 
 class LinuxInstallerApp:
     def __init__(self, root):
         self.root = root
         self.root.title(APP_TITLE)
-        self.root.geometry("860x620")
-        self.root.minsize(820, 560)
+        self.root.geometry("1080x720")
+        self.root.minsize(960, 640)
 
         self.selected_file = ""
         self.selected_icon = ""
         self.detected_name = ""
         self.detected_comment = ""
         self.temp_extract_dir = None
+        self.installed_apps_cache = []
+        self.busy_dialog = None
+        self.busy_bar = None
 
+        self.ensure_app_dirs()
         self.build_ui()
         self.load_cli_file()
+        self.refresh_installed_apps()
+
+        self.root.after(300, self.auto_register_handler)
+
+    def ensure_app_dirs(self):
+        os.makedirs(INSTALL_DIR, exist_ok=True)
+        os.makedirs(DESKTOP_DIR, exist_ok=True)
+        os.makedirs(ICON_DIR, exist_ok=True)
+        os.makedirs(APP_STATE_DIR, exist_ok=True)
+
+        if not os.path.exists(MANIFEST_FILE):
+            self.save_manifest([])
+
+    # -------------------------
+    # UI
+    # -------------------------
 
     def build_ui(self):
-        wrapper = tk.Frame(self.root, padx=14, pady=14)
+        self.notebook = ttk.Notebook(self.root)
+        self.notebook.pack(fill="both", expand=True, padx=10, pady=10)
+
+        self.installer_tab = tk.Frame(self.notebook)
+        self.apps_tab = tk.Frame(self.notebook)
+
+        self.notebook.add(self.installer_tab, text="Installer")
+        self.notebook.add(self.apps_tab, text="Installed Apps")
+
+        self.build_installer_tab()
+        self.build_apps_tab()
+
+    def build_installer_tab(self):
+        wrapper = tk.Frame(self.installer_tab, padx=14, pady=14)
         wrapper.pack(fill="both", expand=True)
 
         tk.Label(
@@ -59,9 +95,14 @@ class LinuxInstallerApp:
         top.pack(fill="x", pady=(0, 10))
 
         tk.Button(top, text="Open File", width=16, command=self.pick_file).pack(side="left", padx=(0, 6))
-        tk.Button(top, text="Detect Icon", width=16, command=self.detect_icon_now).pack(side="left", padx=(0, 6))
-        tk.Button(top, text="Install Selected", width=16, command=self.install_selected).pack(side="left", padx=(0, 6))
-        tk.Button(top, text="Register Opener", width=16, command=self.register_as_handler).pack(side="left", padx=(0, 6))
+        
+        tk.Button(
+            top,
+            text="Install",
+            width=16,
+            command=lambda: self.run_with_loader_safe("Installing package...", self.install_selected)
+        ).pack(side="left", padx=(0, 6))
+        
         tk.Button(top, text="Clear", width=16, command=self.clear_selection).pack(side="left")
 
         info = tk.LabelFrame(wrapper, text="Package Info", padx=10, pady=10)
@@ -73,31 +114,188 @@ class LinuxInstallerApp:
         self.comment_var = tk.StringVar(value="Comment: -")
         self.icon_var = tk.StringVar(value="Detected icon: -")
 
-        tk.Label(info, textvariable=self.file_var, justify="left", wraplength=780, anchor="w").pack(anchor="w", fill="x")
+        tk.Label(info, textvariable=self.file_var, justify="left", wraplength=950, anchor="w").pack(anchor="w", fill="x")
         tk.Label(info, textvariable=self.type_var, anchor="w").pack(anchor="w", pady=(8, 0))
         tk.Label(info, textvariable=self.name_var, anchor="w").pack(anchor="w", pady=(6, 0))
         tk.Label(info, textvariable=self.comment_var, anchor="w").pack(anchor="w", pady=(6, 0))
-        tk.Label(info, textvariable=self.icon_var, justify="left", wraplength=780, anchor="w").pack(anchor="w", pady=(6, 0))
-
-        actions = tk.LabelFrame(wrapper, text="Actions", padx=10, pady=10)
-        actions.pack(fill="x", pady=(0, 10))
-
-        tk.Button(actions, text="Install AppImage", width=22, command=self.install_appimage).grid(row=0, column=0, padx=6, pady=6, sticky="w")
-        tk.Button(actions, text="Install DEB", width=22, command=self.install_deb).grid(row=0, column=1, padx=6, pady=6, sticky="w")
-        tk.Button(actions, text="Uninstall AppImage", width=22, command=self.uninstall_appimage).grid(row=1, column=0, padx=6, pady=6, sticky="w")
-        tk.Button(actions, text="Unregister Opener", width=22, command=self.unregister_as_handler).grid(row=1, column=1, padx=6, pady=6, sticky="w")
+        tk.Label(info, textvariable=self.icon_var, justify="left", wraplength=950, anchor="w").pack(anchor="w", pady=(6, 0))
 
         log_frame = tk.LabelFrame(wrapper, text="Status", padx=10, pady=10)
         log_frame.pack(fill="both", expand=True)
 
-        self.log_widget = tk.Text(log_frame, height=18, wrap="word")
+        self.log_widget = tk.Text(log_frame, height=16, wrap="word")
         self.log_widget.pack(fill="both", expand=True)
 
         self.log("Ready.")
 
+    def build_apps_tab(self):
+        wrapper = tk.Frame(self.apps_tab, padx=14, pady=14)
+        wrapper.pack(fill="both", expand=True)
+
+        tk.Label(
+            wrapper,
+            text="Installed Apps",
+            font=("Arial", 18, "bold")
+        ).pack(anchor="w")
+
+        tk.Label(
+            wrapper,
+            text="Shows only apps managed by this installer.",
+            fg="#444"
+        ).pack(anchor="w", pady=(4, 12))
+
+        controls = tk.Frame(wrapper)
+        controls.pack(fill="x", pady=(0, 10))
+
+        tk.Label(controls, text="Search:").pack(side="left")
+        self.search_var = tk.StringVar()
+        search_entry = tk.Entry(controls, textvariable=self.search_var, width=40)
+        search_entry.pack(side="left", padx=(6, 10))
+        search_entry.bind("<KeyRelease>", lambda e: self.populate_installed_apps_tree())
+
+        tk.Button(
+            controls,
+            text="Refresh",
+            width=14,
+            command=lambda: self.run_with_loader_safe("Refreshing installed apps...", self.refresh_installed_apps)
+        ).pack(side="left", padx=(0, 6))
+
+        tk.Button(
+            controls,
+            text="Uninstall Selected",
+            width=18,
+            command=lambda: self.run_with_loader_safe("Uninstalling selected app...", self.uninstall_selected_installed_app)
+        ).pack(side="left", padx=(0, 6))
+
+        tree_frame = tk.Frame(wrapper)
+        tree_frame.pack(fill="both", expand=True)
+
+        columns = ("name", "version", "source", "desktop", "exec")
+        self.apps_tree = ttk.Treeview(tree_frame, columns=columns, show="headings")
+        self.apps_tree.heading("name", text="Name")
+        self.apps_tree.heading("version", text="Version")
+        self.apps_tree.heading("source", text="Source")
+        self.apps_tree.heading("desktop", text="Desktop File")
+        self.apps_tree.heading("exec", text="Exec")
+
+        self.apps_tree.column("name", width=240)
+        self.apps_tree.column("version", width=110)
+        self.apps_tree.column("source", width=100)
+        self.apps_tree.column("desktop", width=300)
+        self.apps_tree.column("exec", width=280)
+
+        yscroll = ttk.Scrollbar(tree_frame, orient="vertical", command=self.apps_tree.yview)
+        self.apps_tree.configure(yscrollcommand=yscroll.set)
+
+        self.apps_tree.pack(side="left", fill="both", expand=True)
+        yscroll.pack(side="right", fill="y")
+
+        details = tk.LabelFrame(wrapper, text="Selected App Details", padx=10, pady=10)
+        details.pack(fill="x", pady=(10, 0))
+
+        self.selected_app_details = tk.StringVar(value="No app selected.")
+        tk.Label(details, textvariable=self.selected_app_details, justify="left", anchor="w", wraplength=980).pack(anchor="w", fill="x")
+
+        self.apps_tree.bind("<<TreeviewSelect>>", lambda e: self.update_selected_app_details())
+
+    # -------------------------
+    # Busy dialog
+    # -------------------------
+
+    def show_busy_dialog(self, message="Processing..."):
+        self.close_busy_dialog()
+
+        self.root.config(cursor="watch")
+        self.root.update_idletasks()
+
+        self.busy_dialog = tk.Toplevel(self.root)
+        self.busy_dialog.title("Please wait")
+        self.busy_dialog.resizable(False, False)
+        self.busy_dialog.transient(self.root)
+        self.busy_dialog.grab_set()
+        self.busy_dialog.protocol("WM_DELETE_WINDOW", lambda: None)
+
+        width = 320
+        height = 120
+
+        # 👉 Get parent window position and size
+        self.root.update_idletasks()
+        root_x = self.root.winfo_rootx()
+        root_y = self.root.winfo_rooty()
+        root_width = self.root.winfo_width()
+        root_height = self.root.winfo_height()
+
+        # 👉 Calculate center position
+        x = root_x + (root_width // 2) - (width // 2)
+        y = root_y + (root_height // 2) - (height // 2)
+
+        self.busy_dialog.geometry(f"{width}x{height}+{x}+{y}")
+
+        frame = tk.Frame(self.busy_dialog, padx=16, pady=16)
+        frame.pack(fill="both", expand=True)
+
+        tk.Label(frame, text=message, font=("Arial", 11)).pack(pady=(0, 12))
+
+        self.busy_bar = ttk.Progressbar(frame, mode="indeterminate", length=260)
+        self.busy_bar.pack()
+        self.busy_bar.start(10)
+
+        self.busy_dialog.update_idletasks()
+
+    def close_busy_dialog(self):
+        try:
+            if self.busy_bar:
+                self.busy_bar.stop()
+        except Exception:
+            pass
+
+        try:
+            if self.busy_dialog:
+                self.busy_dialog.grab_release()
+                self.busy_dialog.destroy()
+        except Exception:
+            pass
+
+        self.busy_bar = None
+        self.busy_dialog = None
+
+        try:
+            self.root.config(cursor="")
+            self.root.update_idletasks()
+        except Exception:
+            pass
+
+    def run_with_loader(self, message, func, *args, **kwargs):
+        self.show_busy_dialog(message)
+        try:
+            self.root.update_idletasks()
+            return func(*args, **kwargs)
+        finally:
+            self.close_busy_dialog()
+
+    def run_with_loader_safe(self, message, func, *args, **kwargs):
+        self.show_busy_dialog(message)
+        try:
+            self.root.update_idletasks()
+            return func(*args, **kwargs)
+        except Exception as e:
+            self.log(f"Operation failed: {e}")
+            messagebox.showerror("Error", str(e))
+            return None
+        finally:
+            self.close_busy_dialog()
+
+    # -------------------------
+    # Logging
+    # -------------------------
+
     def log(self, text):
         self.log_widget.insert("end", text + "\n")
         self.log_widget.see("end")
+
+    # -------------------------
+    # Installer tab logic
+    # -------------------------
 
     def clear_selection(self):
         self.selected_file = ""
@@ -130,7 +328,7 @@ class LinuxInstallerApp:
             ]
         )
         if path:
-            self.set_selected_file(path)
+            self.run_with_loader_safe("Loading selected file...", self.set_selected_file, path)
 
     def set_selected_file(self, path):
         self.cleanup_temp_dir()
@@ -219,46 +417,246 @@ class LinuxInstallerApp:
         else:
             messagebox.showerror("Unsupported", "Only .AppImage and .deb files are supported.")
 
+    # -------------------------
+    # Executable handling
+    # -------------------------
+
+    def is_executable(self, path):
+        return os.access(path, os.X_OK)
+
+    def make_file_executable(self, path):
+        mode = os.stat(path).st_mode
+        os.chmod(path, mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
+
+    def ensure_appimage_executable_for_backend(self, source_path, working_path):
+        source_exec = self.is_executable(source_path)
+        work_exec = self.is_executable(working_path)
+
+        self.log(f"Source executable: {source_exec}")
+        self.log(f"Working copy executable: {work_exec}")
+
+        if not source_exec:
+            allow = messagebox.askyesno(
+                "AppImage not executable",
+                "This AppImage is not executable yet.\n\nDo you want Linux App Installer to add execute permission automatically?"
+            )
+            if not allow:
+                self.log("User declined making the AppImage executable.")
+                return False
+
+            try:
+                self.make_file_executable(source_path)
+                self.log(f"Made source AppImage executable: {source_path}")
+            except Exception as e:
+                self.log(f"Failed to make source AppImage executable: {e}")
+                messagebox.showerror(
+                    "Permission change failed",
+                    f"Could not make the original AppImage executable.\n\n{e}"
+                )
+                return False
+
+        try:
+            self.make_file_executable(working_path)
+            self.log(f"Made working AppImage executable: {working_path}")
+        except Exception as e:
+            self.log(f"Failed to make working AppImage executable: {e}")
+            messagebox.showerror(
+                "Permission change failed",
+                f"Could not make the backend working copy executable.\n\n{e}"
+            )
+            return False
+
+        return True
+
+    # -------------------------
+    # Version / duplicate checks
+    # -------------------------
+
+    def normalize_app_name(self, name):
+        return re.sub(r"[\s._-]+", "", (name or "").strip().lower())
+
+    def extract_version_from_text(self, text):
+        if not text:
+            return ""
+
+        patterns = [
+            r"\b\d+\.\d+\.\d+(?:\.\d+)?\b",
+            r"\b\d+\.\d+\b",
+            r"\b\d{4}\.\d+\b",
+        ]
+
+        for pattern in patterns:
+            match = re.search(pattern, text)
+            if match:
+                return match.group(0)
+
+        return ""
+
+    def detect_app_version(self, file_path, detected_name=""):
+        sources = [
+            detected_name or "",
+            os.path.splitext(os.path.basename(file_path))[0]
+        ]
+
+        for src in sources:
+            version = self.extract_version_from_text(src)
+            if version:
+                return version
+
+        return ""
+
+    def find_existing_installed_app(self, app_name):
+        manifest = self.load_manifest()
+        target_name = self.normalize_app_name(app_name)
+
+        for item in manifest:
+            existing_name = self.normalize_app_name(item.get("name", ""))
+            if existing_name == target_name:
+                return item
+
+        return None
+    
+    def compare_versions(self, v1, v2):
+        def parts(v):
+            return [int(x) for x in re.findall(r"\d+", v or "0")]
+
+        a = parts(v1)
+        b = parts(v2)
+
+        max_len = max(len(a), len(b))
+        a += [0] * (max_len - len(a))
+        b += [0] * (max_len - len(b))
+
+        if a > b:
+            return 1
+        if a < b:
+            return -1
+        return 0
+
+    # -------------------------
+    # AppImage metadata
+    # -------------------------
+
     def extract_appimage_metadata(self, appimage_path):
         result = {"name": "", "comment": "", "icon_path": ""}
         extract_dir = self.make_temp_dir("appimage_extract_")
 
         try:
-            subprocess.run(
-                [appimage_path, "--appimage-extract"],
+            temp_appimage = os.path.join(extract_dir, os.path.basename(appimage_path))
+            shutil.copy2(appimage_path, temp_appimage)
+            self.log(f"Copied AppImage to temp location: {temp_appimage}")
+
+            if not self.ensure_appimage_executable_for_backend(appimage_path, temp_appimage):
+                result["name"] = self.default_name_from_file(appimage_path)
+                return result
+
+            proc = subprocess.run(
+                [temp_appimage, "--appimage-extract"],
                 cwd=extract_dir,
                 stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL,
+                stderr=subprocess.PIPE,
+                text=True,
                 check=False
             )
+
+            if proc.returncode != 0:
+                err = (proc.stderr or "").strip()
+                self.log(f"AppImage extract command failed with code {proc.returncode}")
+                if err:
+                    self.log(f"stderr: {err}")
         except Exception as e:
             self.log(f"AppImage extraction failed: {e}")
+            result["name"] = self.default_name_from_file(appimage_path)
             return result
 
         root = os.path.join(extract_dir, "squashfs-root")
         if not os.path.isdir(root):
             self.log("AppImage extraction did not produce squashfs-root.")
+            result["name"] = self.default_name_from_file(appimage_path)
             return result
 
-        desktop_files = self.find_files(root, [".desktop"])
+        self.log(f"AppImage extracted to: {root}")
 
-        if desktop_files:
-            desktop_info = self.parse_desktop_file(desktop_files[0])
+        diricon = self.find_diricon(root)
+        if diricon:
+            self.log(f"Found .DirIcon: {diricon}")
+
+        desktop_files = self.find_files(root, [".desktop"])
+        self.log(f"Found {len(desktop_files)} desktop file(s).")
+
+        best_desktop = self.choose_best_desktop_file(desktop_files, appimage_path)
+        icon_name = ""
+
+        if best_desktop:
+            self.log(f"Using desktop file: {best_desktop}")
+            desktop_info = self.parse_desktop_file(best_desktop)
             result["name"] = desktop_info.get("Name", "") or self.default_name_from_file(appimage_path)
             result["comment"] = desktop_info.get("Comment", "")
             icon_name = desktop_info.get("Icon", "")
+            self.log(f"Desktop Icon field: {icon_name or '-'}")
         else:
             result["name"] = self.default_name_from_file(appimage_path)
-            icon_name = ""
+            self.log("No desktop file selected, using filename as app name.")
+
+        if diricon:
+            result["icon_path"] = diricon
+            return result
 
         icon_path = self.find_icon_in_extracted_tree(root, icon_name)
+        if icon_path:
+            self.log(f"Matched icon by name: {icon_path}")
+
         if not icon_path:
             icon_path = self.find_first_image(root)
+            if icon_path:
+                self.log(f"Using best fallback image: {icon_path}")
 
         if icon_path:
             result["icon_path"] = icon_path
+        else:
+            self.log("No AppImage icon found. Falling back to installer icon if available.")
 
         return result
+
+    def find_diricon(self, root_dir):
+        candidates = [
+            os.path.join(root_dir, ".DirIcon"),
+            os.path.join(root_dir, ".diricon"),
+        ]
+        for path in candidates:
+            if os.path.exists(path):
+                return path
+        return ""
+
+    def choose_best_desktop_file(self, desktop_files, appimage_path):
+        if not desktop_files:
+            return ""
+
+        app_name = os.path.splitext(os.path.basename(appimage_path))[0].lower()
+        scored = []
+
+        for path in desktop_files:
+            info = self.parse_desktop_file(path)
+            score = 0
+
+            exec_val = info.get("Exec", "").lower()
+            name_val = info.get("Name", "").lower()
+
+            if "apprun" in exec_val:
+                score += 100
+            if app_name and app_name in name_val:
+                score += 50
+            if "/applications/" in path.lower():
+                score += 20
+
+            scored.append((score, path))
+
+        scored.sort(key=lambda x: x[0], reverse=True)
+        return scored[0][1] if scored else ""
+
+    # -------------------------
+    # DEB metadata
+    # -------------------------
 
     def extract_deb_metadata(self, deb_path):
         result = {"name": "", "comment": "", "icon_path": ""}
@@ -284,10 +682,12 @@ class LinuxInstallerApp:
         desktop_files = self.find_files(extract_dir, [".desktop"])
 
         if desktop_files:
-            desktop_info = self.parse_desktop_file(desktop_files[0])
+            best_desktop = desktop_files[0]
+            desktop_info = self.parse_desktop_file(best_desktop)
             result["name"] = desktop_info.get("Name", "") or self.default_name_from_file(deb_path)
             result["comment"] = desktop_info.get("Comment", "")
             icon_name = desktop_info.get("Icon", "")
+            self.log(f"DEB desktop icon field: {icon_name or '-'}")
         else:
             result["name"] = self.default_name_from_file(deb_path)
             icon_name = ""
@@ -298,8 +698,14 @@ class LinuxInstallerApp:
 
         if icon_path:
             result["icon_path"] = icon_path
+        else:
+            self.log("No DEB icon found. Falling back to installer icon if available.")
 
         return result
+
+    # -------------------------
+    # Install / uninstall selected package
+    # -------------------------
 
     def install_appimage(self):
         if not self.ensure_file_selected():
@@ -310,54 +716,96 @@ class LinuxInstallerApp:
 
         self.analyze_selected_file()
 
-        try:
-            os.makedirs(INSTALL_DIR, exist_ok=True)
-            os.makedirs(DESKTOP_DIR, exist_ok=True)
-            os.makedirs(ICON_DIR, exist_ok=True)
+        app_name = self.detected_name or self.default_name_from_file(self.selected_file)
+        safe_name = self.slugify(app_name)
+        version = self.detect_app_version(self.selected_file, app_name)
+        self.log(f"Detected version: {version or '-'}")
 
-            app_name = self.detected_name or self.default_name_from_file(self.selected_file)
-            safe_name = self.slugify(app_name)
+        existing_app = self.find_existing_installed_app(app_name)
 
-            target_appimage = os.path.join(INSTALL_DIR, f"{safe_name}.AppImage")
-            shutil.copy2(self.selected_file, target_appimage)
+        if existing_app:
+            existing_version = existing_app.get("version", "")
 
-            mode = os.stat(target_appimage).st_mode
-            os.chmod(target_appimage, mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
+            if version and existing_version and version == existing_version:
+                answer = messagebox.askyesno(
+                    "Same version already installed",
+                    f"'{app_name}' version '{version}' is already installed.\n\n"
+                    "Do you want to reinstall it?"
+                )
+                if not answer:
+                    self.log("User cancelled reinstall.")
+                    return
+            else:
+                action_word = "replace"
 
-            installed_icon_path = ""
-            source_icon = self.selected_icon or self.get_fallback_icon()
+                if version and existing_version:
+                    cmp_result = self.compare_versions(version, existing_version)
+                    if cmp_result > 0:
+                        action_word = "upgrade"
+                    elif cmp_result < 0:
+                        action_word = "downgrade/replace"
 
-            if source_icon and os.path.exists(source_icon):
-                ext = os.path.splitext(source_icon)[1].lower() or ".png"
-                installed_icon_path = os.path.join(ICON_DIR, f"{safe_name}{ext}")
-                shutil.copy2(source_icon, installed_icon_path)
+                answer = messagebox.askyesno(
+                    "Different version already installed",
+                    f"'{app_name}' is already installed.\n\n"
+                    f"Installed version: {existing_version or '-'}\n"
+                    f"New version: {version or '-'}\n\n"
+                    f"Do you want to {action_word} the installed version?"
+                )
+                if not answer:
+                    self.log("User cancelled upgrade/replacement.")
+                    return
 
-            desktop_path = os.path.join(DESKTOP_DIR, f"{safe_name}.desktop")
-            desktop_content = self.build_app_desktop(
-                app_name=app_name,
-                comment=self.detected_comment or "Installed by Linux Installer",
-                exec_path=target_appimage,
-                icon_path=installed_icon_path,
-            )
+        target_appimage = os.path.join(INSTALL_DIR, f"{safe_name}.AppImage")
+        shutil.copy2(self.selected_file, target_appimage)
 
-            with open(desktop_path, "w", encoding="utf-8") as f:
-                f.write(desktop_content)
+        if not self.is_executable(target_appimage):
+            self.make_file_executable(target_appimage)
+            self.log(f"Made installed AppImage executable: {target_appimage}")
 
-            os.chmod(desktop_path, 0o755)
-            self.try_run(["update-desktop-database", DESKTOP_DIR], check=False)
+        installed_icon_path = ""
+        source_icon = self.selected_icon or self.get_fallback_icon()
 
-            self.log(f"Installed AppImage to: {target_appimage}")
-            self.log(f"Created launcher: {desktop_path}")
-            if installed_icon_path:
-                self.log(f"Installed icon: {installed_icon_path}")
+        if source_icon and os.path.exists(source_icon):
+            ext = os.path.splitext(source_icon)[1].lower() or ".png"
+            installed_icon_path = os.path.join(ICON_DIR, f"{safe_name}{ext}")
+            shutil.copy2(source_icon, installed_icon_path)
 
-            messagebox.showinfo(
-                "Installed",
-                f"{app_name} was installed.\n\nIt should appear in your app menu."
-            )
-        except Exception as e:
-            self.log(f"AppImage install failed: {e}")
-            messagebox.showerror("Install failed", str(e))
+        desktop_path = os.path.join(DESKTOP_DIR, f"{safe_name}.desktop")
+        desktop_content = self.build_app_desktop(
+            app_name=app_name,
+            comment=self.detected_comment or "Installed by Linux Installer",
+            exec_path=target_appimage,
+            icon_path=installed_icon_path,
+        )
+
+        with open(desktop_path, "w", encoding="utf-8") as f:
+            f.write(desktop_content)
+
+        os.chmod(desktop_path, 0o755)
+        self.try_run(["update-desktop-database", DESKTOP_DIR], check=False)
+
+        self.add_appimage_to_manifest({
+            "name": app_name,
+            "slug": safe_name,
+            "version": version,
+            "source_file": os.path.abspath(self.selected_file),
+            "installed_appimage": target_appimage,
+            "desktop_file": desktop_path,
+            "icon_file": installed_icon_path,
+        })
+
+        self.log(f"Installed AppImage to: {target_appimage}")
+        self.log(f"Created launcher: {desktop_path}")
+        if installed_icon_path:
+            self.log(f"Installed icon: {installed_icon_path}")
+
+        self.refresh_installed_apps()
+
+        messagebox.showinfo(
+            "Installed",
+            f"{app_name} was installed.\n\nIt should appear in your app menu."
+        )
 
     def uninstall_appimage(self):
         if not self.ensure_file_selected():
@@ -367,17 +815,31 @@ class LinuxInstallerApp:
             return
 
         self.analyze_selected_file()
+        self.remove_installed_appimage_by_name(self.detected_name or self.default_name_from_file(self.selected_file))
 
-        try:
-            app_name = self.detected_name or self.default_name_from_file(self.selected_file)
-            safe_name = self.slugify(app_name)
+    def remove_installed_appimage_by_name(self, app_name):
+        safe_name = self.slugify(app_name)
+        removed = False
 
-            removed = False
+        manifest = self.load_manifest()
+        new_manifest = []
+
+        for item in manifest:
+            if item.get("slug") == safe_name or item.get("name") == app_name:
+                for path_key in ("installed_appimage", "desktop_file", "icon_file"):
+                    path = item.get(path_key, "")
+                    if path and os.path.exists(path):
+                        os.remove(path)
+                        self.log(f"Removed: {path}")
+                        removed = True
+            else:
+                new_manifest.append(item)
+
+        if not removed:
             candidates = [
                 os.path.join(INSTALL_DIR, f"{safe_name}.AppImage"),
                 os.path.join(DESKTOP_DIR, f"{safe_name}.desktop"),
             ]
-
             for ext in [".png", ".svg", ".xpm", ".ico"]:
                 candidates.append(os.path.join(ICON_DIR, f"{safe_name}{ext}"))
 
@@ -387,15 +849,14 @@ class LinuxInstallerApp:
                     self.log(f"Removed: {path}")
                     removed = True
 
-            self.try_run(["update-desktop-database", DESKTOP_DIR], check=False)
+        self.save_manifest(new_manifest)
+        self.try_run(["update-desktop-database", DESKTOP_DIR], check=False)
+        self.refresh_installed_apps()
 
-            if removed:
-                messagebox.showinfo("Uninstalled", f"{app_name} was removed.")
-            else:
-                messagebox.showinfo("Nothing found", "No installed files were found for that app.")
-        except Exception as e:
-            self.log(f"Uninstall failed: {e}")
-            messagebox.showerror("Uninstall failed", str(e))
+        if removed:
+            messagebox.showinfo("Uninstalled", f"{app_name} was removed.")
+        else:
+            messagebox.showinfo("Nothing found", "No installed files were found for that app.")
 
     def install_deb(self):
         if not self.ensure_file_selected():
@@ -444,95 +905,282 @@ class LinuxInstallerApp:
             "No GUI package installer or pkexec+apt was found on this system."
         )
 
+    # -------------------------
+    # Registration
+    # -------------------------
+
+    def auto_register_handler(self):
+        """Run once at startup: if not yet registered, register now."""
+        self.register_as_handler()
+
     def register_as_handler(self):
-        try:
-            os.makedirs(DESKTOP_DIR, exist_ok=True)
-            os.makedirs(ICON_DIR, exist_ok=True)
+        """Register Linux-App-Installer as the default opener
+        for .AppImage and .deb files, but only if not yet registered."""
 
-            script_path = os.path.abspath(sys.argv[0])
-            python_exec = sys.executable or "python3"
-            desktop_path = os.path.join(DESKTOP_DIR, DESKTOP_FILE_NAME)
+        if self.is_handler_registered():
+            self.log("Registration skipped (already registered).")
+            return
 
-            installer_icon_name = "linux-installer"
-            installer_icon_target = ""
+        # ---------- perform registration ----------
+        script_path   = os.path.abspath(sys.argv[0])
+        python_exec   = sys.executable or "python3"
+        desktop_path  = os.path.join(DESKTOP_DIR, DESKTOP_FILE_NAME)
 
-            fallback_icon = self.get_fallback_icon()
-            if fallback_icon:
-                ext = os.path.splitext(fallback_icon)[1].lower() or ".png"
-                installer_icon_target = os.path.join(ICON_DIR, f"{installer_icon_name}{ext}")
-                shutil.copy2(fallback_icon, installer_icon_target)
+        installer_icon_name   = "linux-app-installer"
+        installer_icon_target = ""
 
-            with open(desktop_path, "w", encoding="utf-8") as f:
-                f.write(self.build_handler_desktop(script_path, python_exec, installer_icon_target))
-
-            os.chmod(desktop_path, 0o755)
-
-            if shutil.which("xdg-mime"):
-                self.try_run(["xdg-mime", "default", DESKTOP_FILE_NAME, APPIMAGE_MIME], check=False)
-                self.try_run(["xdg-mime", "default", DESKTOP_FILE_NAME, DEB_MIME], check=False)
-
-            self.try_run(["update-desktop-database", DESKTOP_DIR], check=False)
-
-            self.log(f"Registered handler desktop file: {desktop_path}")
-            if installer_icon_target:
-                self.log(f"Installer icon copied to: {installer_icon_target}")
-            self.log("Associated Linux Installer with AppImage and DEB MIME types.")
-
-            messagebox.showinfo(
-                "Registered",
-                "Linux Installer was registered.\n\nIts app menu icon now uses your custom icon, and that same icon is the fallback for installed apps."
+        fallback_icon = self.get_fallback_icon()
+        if fallback_icon:
+            ext = os.path.splitext(fallback_icon)[1].lower() or ".png"
+            installer_icon_target = os.path.join(
+                ICON_DIR, f"{installer_icon_name}{ext}"
             )
-        except Exception as e:
-            self.log(f"Registration failed: {e}")
-            messagebox.showerror("Registration failed", str(e))
+            shutil.copy2(fallback_icon, installer_icon_target)
+
+        with open(desktop_path, "w", encoding="utf-8") as f:
+            f.write(self.build_handler_desktop(
+                script_path, python_exec, installer_icon_target)
+            )
+        os.chmod(desktop_path, 0o755)
+
+        if shutil.which("xdg-mime"):
+            self.try_run(["xdg-mime", "default", DESKTOP_FILE_NAME, APPIMAGE_MIME],
+                        check=False)
+            self.try_run(["xdg-mime", "default", DESKTOP_FILE_NAME, DEB_MIME],
+                        check=False)
+
+        self.try_run(["update-desktop-database", DESKTOP_DIR], check=False)
+
+        self.log(f"Registered handler desktop file: {desktop_path}")
+        if installer_icon_target:
+            self.log(f"Installer icon copied to: {installer_icon_target}")
+        self.log("Associated Linux App Installer with AppImage and DEB MIME types.")
+
+        messagebox.showinfo(
+            "Registered",
+            "Linux App Installer was registered.\n\nIts app-menu icon now uses "
+            "your custom icon, and that same icon is the fallback for installed apps."
+        )
 
     def unregister_as_handler(self):
+        desktop_path = os.path.join(DESKTOP_DIR, DESKTOP_FILE_NAME)
+        if os.path.exists(desktop_path):
+            os.remove(desktop_path)
+            self.log(f"Removed: {desktop_path}")
+
+        for ext in [".png", ".svg", ".xpm", ".ico"]:
+            installer_icon = os.path.join(ICON_DIR, f"linux-app-installer{ext}")
+            if os.path.exists(installer_icon):
+                os.remove(installer_icon)
+                self.log(f"Removed: {installer_icon}")
+
+        self.try_run(["update-desktop-database", DESKTOP_DIR], check=False)
+        messagebox.showinfo("Removed", "Linux App Installer registration was removed.")
+    
+    def is_handler_registered(self) -> bool:
+        """Return True if the .desktop file exists *and* the MIME defaults
+        for AppImage and DEB already point at it."""
+
+        desktop_path = os.path.join(DESKTOP_DIR, DESKTOP_FILE_NAME)
+        if not os.path.exists(desktop_path):
+            return False
+
+        if not shutil.which("xdg-mime"):         # no xdg-mime → best-effort check
+            return True
+
         try:
-            desktop_path = os.path.join(DESKTOP_DIR, DESKTOP_FILE_NAME)
-            if os.path.exists(desktop_path):
-                os.remove(desktop_path)
-                self.log(f"Removed: {desktop_path}")
+            # Check each MIME type
+            for m in (APPIMAGE_MIME, DEB_MIME):
+                out = subprocess.check_output(
+                    ["xdg-mime", "query", "default", m],
+                    text=True,
+                    stderr=subprocess.DEVNULL
+                ).strip()
+                if out != DESKTOP_FILE_NAME:
+                    return False
+        except Exception:
+            return False
 
-            for ext in [".png", ".svg", ".xpm", ".ico"]:
-                installer_icon = os.path.join(ICON_DIR, f"linux-installer{ext}")
-                if os.path.exists(installer_icon):
-                    os.remove(installer_icon)
-                    self.log(f"Removed: {installer_icon}")
+        return True
 
-            self.try_run(["update-desktop-database", DESKTOP_DIR], check=False)
-            messagebox.showinfo("Removed", "Linux Installer registration was removed.")
-        except Exception as e:
-            self.log(f"Unregister failed: {e}")
-            messagebox.showerror("Unregister failed", str(e))
+    # -------------------------
+    # Installed apps manager
+    # -------------------------
+
+    def refresh_installed_apps(self):
+        self.installed_apps_cache = self.collect_installed_apps()
+        self.populate_installed_apps_tree()
+        self.update_selected_app_details()
+
+    def populate_installed_apps_tree(self):
+        query = self.search_var.get().strip().lower() if hasattr(self, "search_var") else ""
+
+        for item in self.apps_tree.get_children():
+            self.apps_tree.delete(item)
+
+        filtered = []
+        for app in self.installed_apps_cache:
+            haystack = " ".join([
+                app.get("name", ""),
+                app.get("version", ""),
+                app.get("source", ""),
+                app.get("desktop_file", ""),
+                app.get("exec", "")
+            ]).lower()
+
+            if query and query not in haystack:
+                continue
+            filtered.append(app)
+
+        for idx, app in enumerate(filtered):
+            self.apps_tree.insert(
+                "",
+                "end",
+                iid=str(idx),
+                values=(
+                    app.get("name", ""),
+                    app.get("version", ""),
+                    app.get("source", ""),
+                    app.get("desktop_file", ""),
+                    app.get("exec", "")
+                )
+            )
+
+    def update_selected_app_details(self):
+        selected = self.get_selected_installed_app()
+        if not selected:
+            self.selected_app_details.set("No app selected.")
+            return
+
+        text = (
+            f"Name: {selected.get('name', '-')}\n"
+            f"Version: {selected.get('version', '-')}\n"
+            f"Source: {selected.get('source', '-')}\n"
+            f"Desktop file: {selected.get('desktop_file', '-')}\n"
+            f"Exec: {selected.get('exec', '-')}\n"
+            f"Managed by installer: {'Yes' if selected.get('managed') else 'No'}\n"
+            f"Uninstall method: {selected.get('uninstall_method', '-')}"
+        )
+        self.selected_app_details.set(text)
+
+    def get_selected_installed_app(self):
+        selection = self.apps_tree.selection()
+        if not selection:
+            return None
+
+        selected_values = self.apps_tree.item(selection[0], "values")
+        if not selected_values:
+            return None
+
+        name, version, source, desktop_file, exec_cmd = selected_values
+
+        for app in self.installed_apps_cache:
+            if (
+                app.get("name", "") == name
+                and app.get("version", "") == version
+                and app.get("source", "") == source
+                and app.get("desktop_file", "") == desktop_file
+                and app.get("exec", "") == exec_cmd
+            ):
+                return app
+        return None
+
+    def uninstall_selected_installed_app(self):
+        app = self.get_selected_installed_app()
+        if not app:
+            messagebox.showerror("No selection", "Please select an installed app first.")
+            return
+
+        name = app.get("name", "Unknown App")
+
+        if not messagebox.askyesno("Uninstall", f"Remove '{name}'?"):
+            return
+
+        self.remove_installed_appimage_by_name(name)
+
+    def collect_installed_apps(self):
+        apps = []
+        seen = set()
+
+        for item in self.load_manifest():
+            app = {
+                "name": item.get("name", ""),
+                "version": item.get("version", ""),
+                "source": "AppImage",
+                "desktop_file": item.get("desktop_file", ""),
+                "exec": item.get("installed_appimage", ""),
+                "managed": True,
+                "uninstall_method": "manifest_appimage",
+            }
+            key = (app["name"], app["source"], app["desktop_file"])
+            if key not in seen:
+                apps.append(app)
+                seen.add(key)
+
+        apps.sort(key=lambda a: (a.get("name", "").lower(), a.get("source", "").lower()))
+        return apps
+
+    # -------------------------
+    # Manifest
+    # -------------------------
+
+    def load_manifest(self):
+        try:
+            with open(MANIFEST_FILE, "r", encoding="utf-8") as f:
+                data = json.load(f)
+                if isinstance(data, list):
+                    return data
+        except Exception:
+            pass
+        return []
+
+    def save_manifest(self, data):
+        with open(MANIFEST_FILE, "w", encoding="utf-8") as f:
+            json.dump(data, f, indent=2)
+
+    def add_appimage_to_manifest(self, item):
+        manifest = self.load_manifest()
+
+        filtered = []
+        for existing in manifest:
+            if existing.get("slug") != item.get("slug"):
+                filtered.append(existing)
+
+        filtered.append(item)
+        self.save_manifest(filtered)
+
+    # -------------------------
+    # Desktop and icon helpers
+    # -------------------------
 
     def build_app_desktop(self, app_name, comment, exec_path, icon_path):
         return f"""[Desktop Entry]
-Version=1.0
-Type=Application
-Name={app_name}
-Comment={comment}
-Exec="{exec_path}"
-Icon={icon_path}
-Terminal=false
-Categories=Utility;
-StartupNotify=true
-"""
+            Version=1.0
+            Type=Application
+            Name={app_name}
+            Comment={comment}
+            Exec="{exec_path}"
+            Icon={icon_path}
+            Terminal=false
+            Categories=Utility;
+            StartupNotify=true
+            """
 
     def build_handler_desktop(self, script_path, python_exec, icon_path):
         icon_value = icon_path if icon_path else "system-software-install"
         return f"""[Desktop Entry]
-Version=1.0
-Type=Application
-Name={APP_TITLE}
-Comment={APP_COMMENT}
-Exec="{python_exec}" "{script_path}" %f
-Icon={icon_value}
-Terminal=false
-Categories={APP_CATEGORIES}
-MimeType={APPIMAGE_MIME};{DEB_MIME};
-StartupNotify=true
-NoDisplay=false
-"""
+            Version=1.0
+            Type=Application
+            Name={APP_TITLE}
+            Comment={APP_COMMENT}
+            Exec="{python_exec}" "{script_path}" %f
+            Icon={icon_value}
+            Terminal=false
+            Categories={APP_CATEGORIES}
+            MimeType={APPIMAGE_MIME};{DEB_MIME};
+            StartupNotify=true
+            NoDisplay=false
+            """
 
     def parse_desktop_file(self, path):
         data = {}
@@ -543,10 +1191,10 @@ NoDisplay=false
                     if not line or line.startswith("#") or "=" not in line:
                         continue
                     key, value = line.split("=", 1)
-                    if key in ("Name", "Comment", "Icon", "Exec"):
+                    if key in ("Name", "Comment", "Icon", "Exec", "NoDisplay"):
                         data[key] = value.strip()
-        except Exception as e:
-            self.log(f"Failed to parse desktop file {path}: {e}")
+        except Exception:
+            pass
         return data
 
     def find_files(self, root_dir, extensions):
@@ -563,9 +1211,8 @@ NoDisplay=false
         for dirpath, _, filenames in os.walk(root_dir):
             for name in filenames:
                 low = name.lower()
-                if low.endswith((".png", ".svg", ".xpm")):
-                    path = os.path.join(dirpath, name)
-                    preferred.append(path)
+                if low.endswith((".png", ".svg", ".xpm", ".ico")):
+                    preferred.append(os.path.join(dirpath, name))
 
         if not preferred:
             return ""
@@ -579,42 +1226,73 @@ NoDisplay=false
                 s += 40
             if "256x256" in low:
                 s += 30
-            if "128x128" in low:
+            elif "128x128" in low:
                 s += 20
+            elif "64x64" in low:
+                s += 10
             if low.endswith(".png"):
                 s += 10
+            elif low.endswith(".svg"):
+                s += 8
             return s
 
         preferred.sort(key=score, reverse=True)
         return preferred[0]
 
     def find_icon_in_extracted_tree(self, root_dir, icon_name):
-        if not icon_name:
-            return ""
-
-        icon_name = os.path.basename(icon_name.strip())
         candidates = []
+        wanted = (icon_name or "").lower().strip()
+        wanted = os.path.basename(wanted) if wanted else ""
 
         for dirpath, _, filenames in os.walk(root_dir):
             for name in filenames:
+                full_path = os.path.join(dirpath, name)
                 file_base, file_ext = os.path.splitext(name)
-                if file_ext.lower() not in (".png", ".svg", ".xpm", ".ico"):
+                file_ext = file_ext.lower()
+
+                if file_ext not in (".png", ".svg", ".xpm", ".ico"):
                     continue
 
-                full_path = os.path.join(dirpath, name)
+                score = 0
+                low_path = full_path.lower()
+                low_base = file_base.lower()
+                low_name = name.lower()
 
-                if name == icon_name:
-                    candidates.append((100, full_path))
-                elif file_base == icon_name:
-                    candidates.append((90, full_path))
-                elif icon_name.lower() in file_base.lower():
-                    candidates.append((70, full_path))
+                if wanted:
+                    if low_name == wanted:
+                        score += 120
+                    if low_base == wanted:
+                        score += 100
+                    if wanted in low_base:
+                        score += 70
 
-        if candidates:
-            candidates.sort(key=lambda item: item[0], reverse=True)
-            return candidates[0][1]
+                if "/usr/share/icons/" in low_path:
+                    score += 40
+                if "/usr/share/pixmaps/" in low_path:
+                    score += 35
+                if "256x256" in low_path:
+                    score += 30
+                elif "128x128" in low_path:
+                    score += 20
+                elif "64x64" in low_path:
+                    score += 10
 
-        return ""
+                if file_ext == ".png":
+                    score += 10
+                elif file_ext == ".svg":
+                    score += 8
+
+                candidates.append((score, full_path))
+
+        if not candidates:
+            return ""
+
+        candidates.sort(key=lambda x: x[0], reverse=True)
+        return candidates[0][1]
+
+    # -------------------------
+    # Utilities
+    # -------------------------
 
     def slugify(self, value):
         value = value.strip().lower()
@@ -649,6 +1327,7 @@ if __name__ == "__main__":
     app = LinuxInstallerApp(root)
 
     def on_close():
+        app.close_busy_dialog()
         app.cleanup_temp_dir()
         root.destroy()
 
