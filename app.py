@@ -17,6 +17,7 @@ DESKTOP_DIR = os.path.expanduser("~/.local/share/applications")
 ICON_DIR = os.path.expanduser("~/.local/share/icons")
 APP_STATE_DIR = os.path.expanduser("~/.local/share/linux-app-installer")
 MANIFEST_FILE = os.path.join(APP_STATE_DIR, "installed_appimages.json")
+DEB_MANIFEST_FILE = os.path.join(APP_STATE_DIR, "installed_debs.json")
 DESKTOP_FILE_NAME = "linux-app-installer.desktop"
 
 APPIMAGE_MIME = "application/x-iso9660-appimage"
@@ -37,6 +38,8 @@ class LinuxInstallerApp:
         self.selected_icon = ""
         self.detected_name = ""
         self.detected_comment = ""
+        self.detected_package_name = ""
+        self.detected_version = ""
         self.temp_extract_dir = None
         self.installed_apps_cache = []
         self.busy_dialog = None
@@ -57,6 +60,9 @@ class LinuxInstallerApp:
 
         if not os.path.exists(MANIFEST_FILE):
             self.save_manifest([])
+
+        if not os.path.exists(DEB_MANIFEST_FILE):
+            self.save_deb_manifest([])
 
     # -------------------------
     # UI
@@ -95,14 +101,14 @@ class LinuxInstallerApp:
         top.pack(fill="x", pady=(0, 10))
 
         tk.Button(top, text="Open File", width=16, command=self.pick_file).pack(side="left", padx=(0, 6))
-        
+
         tk.Button(
             top,
             text="Install",
             width=16,
             command=lambda: self.run_with_loader_safe("Installing package...", self.install_selected)
         ).pack(side="left", padx=(0, 6))
-        
+
         tk.Button(top, text="Clear", width=16, command=self.clear_selection).pack(side="left")
 
         info = tk.LabelFrame(wrapper, text="Package Info", padx=10, pady=10)
@@ -113,10 +119,14 @@ class LinuxInstallerApp:
         self.name_var = tk.StringVar(value="Detected name: -")
         self.comment_var = tk.StringVar(value="Comment: -")
         self.icon_var = tk.StringVar(value="Detected icon: -")
+        self.pkg_var = tk.StringVar(value="Package name: -")
+        self.version_var = tk.StringVar(value="Version: -")
 
         tk.Label(info, textvariable=self.file_var, justify="left", wraplength=950, anchor="w").pack(anchor="w", fill="x")
         tk.Label(info, textvariable=self.type_var, anchor="w").pack(anchor="w", pady=(8, 0))
         tk.Label(info, textvariable=self.name_var, anchor="w").pack(anchor="w", pady=(6, 0))
+        tk.Label(info, textvariable=self.pkg_var, anchor="w").pack(anchor="w", pady=(6, 0))
+        tk.Label(info, textvariable=self.version_var, anchor="w").pack(anchor="w", pady=(6, 0))
         tk.Label(info, textvariable=self.comment_var, anchor="w").pack(anchor="w", pady=(6, 0))
         tk.Label(info, textvariable=self.icon_var, justify="left", wraplength=950, anchor="w").pack(anchor="w", pady=(6, 0))
 
@@ -140,7 +150,7 @@ class LinuxInstallerApp:
 
         tk.Label(
             wrapper,
-            text="Shows only apps managed by this installer.",
+            text="Shows apps managed or tracked by this installer.",
             fg="#444"
         ).pack(anchor="w", pady=(4, 12))
 
@@ -175,8 +185,8 @@ class LinuxInstallerApp:
         self.apps_tree.heading("name", text="Name")
         self.apps_tree.heading("version", text="Version")
         self.apps_tree.heading("source", text="Source")
-        self.apps_tree.heading("desktop", text="Desktop File")
-        self.apps_tree.heading("exec", text="Exec")
+        self.apps_tree.heading("desktop", text="Desktop File / Package")
+        self.apps_tree.heading("exec", text="Exec / Source File")
 
         self.apps_tree.column("name", width=240)
         self.apps_tree.column("version", width=110)
@@ -218,14 +228,12 @@ class LinuxInstallerApp:
         width = 320
         height = 120
 
-        # 👉 Get parent window position and size
         self.root.update_idletasks()
         root_x = self.root.winfo_rootx()
         root_y = self.root.winfo_rooty()
         root_width = self.root.winfo_width()
         root_height = self.root.winfo_height()
 
-        # 👉 Calculate center position
         x = root_x + (root_width // 2) - (width // 2)
         y = root_y + (root_height // 2) - (height // 2)
 
@@ -302,11 +310,17 @@ class LinuxInstallerApp:
         self.selected_icon = ""
         self.detected_name = ""
         self.detected_comment = ""
+        self.detected_package_name = ""
+        self.detected_version = ""
+
         self.file_var.set("No file selected")
         self.type_var.set("Type: -")
         self.name_var.set("Detected name: -")
         self.comment_var.set("Comment: -")
         self.icon_var.set("Detected icon: -")
+        self.pkg_var.set("Package name: -")
+        self.version_var.set("Version: -")
+
         self.cleanup_temp_dir()
         self.log("Selection cleared.")
 
@@ -347,13 +361,18 @@ class LinuxInstallerApp:
         self.detected_name = self.default_name_from_file(self.selected_file)
         self.detected_comment = ""
         self.selected_icon = ""
+        self.detected_package_name = ""
+        self.detected_version = ""
 
         if file_type == "AppImage":
             info = self.extract_appimage_metadata(self.selected_file)
+            self.detected_version = info.get("version", "") or self.detect_app_version(self.selected_file, self.detected_name)
         elif file_type == "DEB package":
             info = self.extract_deb_metadata(self.selected_file)
+            self.detected_package_name = info.get("package_name", "")
+            self.detected_version = info.get("version", "")
         else:
-            info = {"name": self.detected_name, "comment": "", "icon_path": ""}
+            info = {"name": self.detected_name, "comment": "", "icon_path": "", "package_name": "", "version": ""}
 
         if info.get("name"):
             self.detected_name = info["name"]
@@ -364,19 +383,22 @@ class LinuxInstallerApp:
         elif self.get_fallback_icon():
             self.selected_icon = self.get_fallback_icon()
 
+        if info.get("package_name"):
+            self.detected_package_name = info["package_name"]
+        if info.get("version"):
+            self.detected_version = info["version"]
+
         self.name_var.set(f"Detected name: {self.detected_name or '-'}")
         self.comment_var.set(f"Comment: {self.detected_comment or '-'}")
         self.icon_var.set(f"Detected icon: {self.selected_icon or '-'}")
+        self.pkg_var.set(f"Package name: {self.detected_package_name or '-'}")
+        self.version_var.set(f"Version: {self.detected_version or '-'}")
 
         self.log(f"Detected name: {self.detected_name or '-'}")
+        self.log(f"Detected package name: {self.detected_package_name or '-'}")
+        self.log(f"Detected version: {self.detected_version or '-'}")
         self.log(f"Detected comment: {self.detected_comment or '-'}")
         self.log(f"Detected icon: {self.selected_icon or '-'}")
-
-    def detect_icon_now(self):
-        if not self.ensure_file_selected():
-            return
-        self.analyze_selected_file()
-        messagebox.showinfo("Detection complete", "Metadata and icon detection finished.")
 
     def detect_file_type(self, path):
         ext = os.path.splitext(path)[1].lower()
@@ -511,11 +533,12 @@ class LinuxInstallerApp:
 
         for item in manifest:
             existing_name = self.normalize_app_name(item.get("name", ""))
-            if existing_name == target_name:
+            existing_slug = self.normalize_app_name(item.get("slug", ""))
+            if existing_name == target_name or existing_slug == target_name:
                 return item
 
         return None
-    
+
     def compare_versions(self, v1, v2):
         def parts(v):
             return [int(x) for x in re.findall(r"\d+", v or "0")]
@@ -533,18 +556,78 @@ class LinuxInstallerApp:
             return -1
         return 0
 
+    def decide_install_action(self, app_name, new_version, existing_version, source_label="package"):
+        if not existing_version:
+            return "install"
+
+        if new_version and existing_version:
+            cmp_result = self.compare_versions(new_version, existing_version)
+
+            if cmp_result == 0:
+                answer = messagebox.askyesno(
+                    f"{source_label} already installed",
+                    f"'{app_name}' version '{new_version}' is already installed.\n\n"
+                    "Do you want to reinstall it?"
+                )
+                return "reinstall" if answer else "cancel"
+
+            if cmp_result > 0:
+                answer = messagebox.askyesno(
+                    "Update available",
+                    f"'{app_name}' is already installed.\n\n"
+                    f"Installed version: {existing_version}\n"
+                    f"New version: {new_version}\n\n"
+                    "Do you want to update it?"
+                )
+                return "upgrade" if answer else "cancel"
+
+            if cmp_result < 0:
+                answer = messagebox.askyesno(
+                    "Older version detected",
+                    f"'{app_name}' is already installed.\n\n"
+                    f"Installed version: {existing_version}\n"
+                    f"Selected version: {new_version}\n\n"
+                    "Do you want to replace it with the older version?"
+                )
+                return "downgrade" if answer else "cancel"
+
+        answer = messagebox.askyesno(
+            f"{source_label} already installed",
+            f"'{app_name}' is already installed.\n\n"
+            f"Installed version: {existing_version or '-'}\n"
+            f"New version: {new_version or '-'}\n\n"
+            "Do you want to replace/reinstall it?"
+        )
+        return "replace" if answer else "cancel"
+
+    def get_installed_deb_version(self, package_name):
+        if not package_name or not shutil.which("dpkg-query"):
+            return ""
+
+        try:
+            version = subprocess.check_output(
+                ["dpkg-query", "-W", "-f=${Version}", package_name],
+                text=True,
+                stderr=subprocess.DEVNULL
+            ).strip()
+            return version
+        except Exception:
+            return ""
+
     # -------------------------
     # AppImage metadata
     # -------------------------
 
     def extract_appimage_metadata(self, appimage_path):
-        result = {"name": "", "comment": "", "icon_path": ""}
+        result = {"name": "", "comment": "", "icon_path": "", "version": ""}
         extract_dir = self.make_temp_dir("appimage_extract_")
 
         try:
             temp_appimage = os.path.join(extract_dir, os.path.basename(appimage_path))
             shutil.copy2(appimage_path, temp_appimage)
             self.log(f"Copied AppImage to temp location: {temp_appimage}")
+
+            result["version"] = self.detect_app_version(appimage_path, self.default_name_from_file(appimage_path))
 
             if not self.ensure_appimage_executable_for_backend(appimage_path, temp_appimage):
                 result["name"] = self.default_name_from_file(appimage_path)
@@ -567,12 +650,14 @@ class LinuxInstallerApp:
         except Exception as e:
             self.log(f"AppImage extraction failed: {e}")
             result["name"] = self.default_name_from_file(appimage_path)
+            result["version"] = self.detect_app_version(appimage_path, result["name"])
             return result
 
         root = os.path.join(extract_dir, "squashfs-root")
         if not os.path.isdir(root):
             self.log("AppImage extraction did not produce squashfs-root.")
             result["name"] = self.default_name_from_file(appimage_path)
+            result["version"] = self.detect_app_version(appimage_path, result["name"])
             return result
 
         self.log(f"AppImage extracted to: {root}")
@@ -597,6 +682,9 @@ class LinuxInstallerApp:
         else:
             result["name"] = self.default_name_from_file(appimage_path)
             self.log("No desktop file selected, using filename as app name.")
+
+        if not result["version"]:
+            result["version"] = self.detect_app_version(appimage_path, result["name"])
 
         if diricon:
             result["icon_path"] = diricon
@@ -659,13 +747,37 @@ class LinuxInstallerApp:
     # -------------------------
 
     def extract_deb_metadata(self, deb_path):
-        result = {"name": "", "comment": "", "icon_path": ""}
+        result = {
+            "name": "",
+            "comment": "",
+            "icon_path": "",
+            "package_name": "",
+            "version": ""
+        }
         extract_dir = self.make_temp_dir("deb_extract_")
 
         if not shutil.which("dpkg-deb"):
             self.log("dpkg-deb not found. Cannot inspect DEB contents.")
             result["name"] = self.default_name_from_file(deb_path)
             return result
+
+        try:
+            pkg_name = subprocess.check_output(
+                ["dpkg-deb", "-f", deb_path, "Package"],
+                text=True,
+                stderr=subprocess.DEVNULL
+            ).strip()
+            version = subprocess.check_output(
+                ["dpkg-deb", "-f", deb_path, "Version"],
+                text=True,
+                stderr=subprocess.DEVNULL
+            ).strip()
+            result["package_name"] = pkg_name
+            result["version"] = version
+            self.log(f"DEB package name: {pkg_name or '-'}")
+            self.log(f"DEB version: {version or '-'}")
+        except Exception as e:
+            self.log(f"Could not read DEB control fields: {e}")
 
         try:
             subprocess.run(
@@ -718,43 +830,24 @@ class LinuxInstallerApp:
 
         app_name = self.detected_name or self.default_name_from_file(self.selected_file)
         safe_name = self.slugify(app_name)
-        version = self.detect_app_version(self.selected_file, app_name)
+        version = self.detected_version or self.detect_app_version(self.selected_file, app_name)
         self.log(f"Detected version: {version or '-'}")
 
         existing_app = self.find_existing_installed_app(app_name)
+        existing_version = existing_app.get("version", "") if existing_app else ""
 
-        if existing_app:
-            existing_version = existing_app.get("version", "")
+        action = self.decide_install_action(
+            app_name=app_name,
+            new_version=version,
+            existing_version=existing_version,
+            source_label="AppImage"
+        )
 
-            if version and existing_version and version == existing_version:
-                answer = messagebox.askyesno(
-                    "Same version already installed",
-                    f"'{app_name}' version '{version}' is already installed.\n\n"
-                    "Do you want to reinstall it?"
-                )
-                if not answer:
-                    self.log("User cancelled reinstall.")
-                    return
-            else:
-                action_word = "replace"
+        if action == "cancel":
+            self.log("User cancelled AppImage installation.")
+            return
 
-                if version and existing_version:
-                    cmp_result = self.compare_versions(version, existing_version)
-                    if cmp_result > 0:
-                        action_word = "upgrade"
-                    elif cmp_result < 0:
-                        action_word = "downgrade/replace"
-
-                answer = messagebox.askyesno(
-                    "Different version already installed",
-                    f"'{app_name}' is already installed.\n\n"
-                    f"Installed version: {existing_version or '-'}\n"
-                    f"New version: {version or '-'}\n\n"
-                    f"Do you want to {action_word} the installed version?"
-                )
-                if not answer:
-                    self.log("User cancelled upgrade/replacement.")
-                    return
+        self.log(f"AppImage action selected: {action}")
 
         target_appimage = os.path.join(INSTALL_DIR, f"{safe_name}.AppImage")
         shutil.copy2(self.selected_file, target_appimage)
@@ -802,20 +895,79 @@ class LinuxInstallerApp:
 
         self.refresh_installed_apps()
 
-        messagebox.showinfo(
-            "Installed",
-            f"{app_name} was installed.\n\nIt should appear in your app menu."
-        )
+        if action == "install":
+            msg = f"{app_name} was installed.\n\nIt should appear in your app menu."
+        elif action == "reinstall":
+            msg = f"{app_name} was reinstalled."
+        elif action == "upgrade":
+            msg = f"{app_name} was updated."
+        elif action == "downgrade":
+            msg = f"{app_name} was replaced with an older version."
+        else:
+            msg = f"{app_name} was replaced."
 
-    def uninstall_appimage(self):
+        messagebox.showinfo("Installed", msg)
+
+    def install_deb(self):
         if not self.ensure_file_selected():
             return
-        if self.detect_file_type(self.selected_file) != "AppImage":
-            messagebox.showerror("Wrong file type", "Please select the original .AppImage file.")
+        if self.detect_file_type(self.selected_file) != "DEB package":
+            messagebox.showerror("Wrong file type", "Please select a .deb file.")
             return
 
-        self.analyze_selected_file()
-        self.remove_installed_appimage_by_name(self.detected_name or self.default_name_from_file(self.selected_file))
+        deb_path = os.path.abspath(self.selected_file)
+        deb_info = self.extract_deb_metadata(deb_path)
+
+        app_name = deb_info.get("name") or self.default_name_from_file(deb_path)
+        package_name = deb_info.get("package_name") or ""
+        new_version = deb_info.get("version") or ""
+        installed_version = self.get_installed_deb_version(package_name)
+
+        self.log(f"DEB detected app name: {app_name}")
+        self.log(f"DEB detected package name: {package_name or '-'}")
+        self.log(f"DEB detected version: {new_version or '-'}")
+        self.log(f"DEB installed version: {installed_version or '-'}")
+
+        action = self.decide_install_action(
+            app_name=app_name,
+            new_version=new_version,
+            existing_version=installed_version,
+            source_label="DEB package"
+        )
+
+        if action == "cancel":
+            self.log("User cancelled DEB installation.")
+            return
+
+        self.add_deb_to_manifest({
+            "name": app_name,
+            "package_name": package_name,
+            "version": new_version,
+            "source_file": deb_path,
+            "source": "DEB",
+        })
+
+        if shutil.which("pkexec") and shutil.which("dpkg"):
+            try:
+                shell_cmd = f"dpkg -i '{deb_path}'; apt-get install -f -y"
+                subprocess.Popen(["pkexec", "bash", "-c", shell_cmd])
+                self.log(f"Started DEB install for: {deb_path}")
+                self.log("Using primary method: dpkg -i ... ; apt-get install -f -y")
+                self.refresh_installed_apps()
+                messagebox.showinfo(
+                    "Started",
+                    f"{action.capitalize()} started using dpkg + apt-get fix."
+                )
+                return
+            except Exception as e:
+                self.log(f"Primary DEB install failed: {e}")
+                messagebox.showerror("Install failed", str(e))
+                return
+
+        messagebox.showerror(
+            "Missing tools",
+            "This system does not have the required pkexec/dpkg tools."
+        )
 
     def remove_installed_appimage_by_name(self, app_name):
         safe_name = self.slugify(app_name)
@@ -829,9 +981,12 @@ class LinuxInstallerApp:
                 for path_key in ("installed_appimage", "desktop_file", "icon_file"):
                     path = item.get(path_key, "")
                     if path and os.path.exists(path):
-                        os.remove(path)
-                        self.log(f"Removed: {path}")
-                        removed = True
+                        try:
+                            os.remove(path)
+                            self.log(f"Removed: {path}")
+                            removed = True
+                        except Exception as e:
+                            self.log(f"Could not remove {path}: {e}")
             else:
                 new_manifest.append(item)
 
@@ -845,9 +1000,12 @@ class LinuxInstallerApp:
 
             for path in candidates:
                 if os.path.exists(path):
-                    os.remove(path)
-                    self.log(f"Removed: {path}")
-                    removed = True
+                    try:
+                        os.remove(path)
+                        self.log(f"Removed: {path}")
+                        removed = True
+                    except Exception as e:
+                        self.log(f"Could not remove {path}: {e}")
 
         self.save_manifest(new_manifest)
         self.try_run(["update-desktop-database", DESKTOP_DIR], check=False)
@@ -858,75 +1016,23 @@ class LinuxInstallerApp:
         else:
             messagebox.showinfo("Nothing found", "No installed files were found for that app.")
 
-    def install_deb(self):
-        if not self.ensure_file_selected():
-            return
-        if self.detect_file_type(self.selected_file) != "DEB package":
-            messagebox.showerror("Wrong file type", "Please select a .deb file.")
-            return
-
-        deb_path = os.path.abspath(self.selected_file)
-
-        gui_installers = [
-            ["gdebi-gtk", deb_path],
-            ["plasma-discover", deb_path],
-            ["gnome-software", deb_path],
-            ["software-center", deb_path],
-        ]
-
-        for cmd in gui_installers:
-            if shutil.which(cmd[0]):
-                try:
-                    subprocess.Popen(cmd)
-                    self.log(f"Opened DEB in GUI installer: {' '.join(cmd)}")
-                    messagebox.showinfo("Opened", "The DEB package was opened in a package installer.")
-                    return
-                except Exception as e:
-                    self.log(f"Failed to launch {cmd[0]}: {e}")
-
-        if shutil.which("pkexec") and shutil.which("apt"):
-            use_pkexec = messagebox.askyesno(
-                "Install DEB",
-                "No GUI package installer was found.\n\nDo you want to install it using administrator permission?"
-            )
-            if use_pkexec:
-                try:
-                    subprocess.Popen(["pkexec", "apt", "install", "-y", deb_path])
-                    self.log(f"Started privileged DEB install: pkexec apt install -y {deb_path}")
-                    messagebox.showinfo("Started", "Installation command was started.")
-                    return
-                except Exception as e:
-                    self.log(f"pkexec install failed: {e}")
-                    messagebox.showerror("Install failed", str(e))
-                    return
-
-        messagebox.showerror(
-            "No installer found",
-            "No GUI package installer or pkexec+apt was found on this system."
-        )
-
     # -------------------------
     # Registration
     # -------------------------
 
     def auto_register_handler(self):
-        """Run once at startup: if not yet registered, register now."""
         self.register_as_handler()
 
     def register_as_handler(self):
-        """Register Linux-App-Installer as the default opener
-        for .AppImage and .deb files, but only if not yet registered."""
-
         if self.is_handler_registered():
             self.log("Registration skipped (already registered).")
             return
 
-        # ---------- perform registration ----------
-        script_path   = os.path.abspath(sys.argv[0])
-        python_exec   = sys.executable or "python3"
-        desktop_path  = os.path.join(DESKTOP_DIR, DESKTOP_FILE_NAME)
+        script_path = os.path.abspath(sys.argv[0])
+        python_exec = sys.executable or "python3"
+        desktop_path = os.path.join(DESKTOP_DIR, DESKTOP_FILE_NAME)
 
-        installer_icon_name   = "linux-app-installer"
+        installer_icon_name = "linux-app-installer"
         installer_icon_target = ""
 
         fallback_icon = self.get_fallback_icon()
@@ -935,7 +1041,10 @@ class LinuxInstallerApp:
             installer_icon_target = os.path.join(
                 ICON_DIR, f"{installer_icon_name}{ext}"
             )
-            shutil.copy2(fallback_icon, installer_icon_target)
+            try:
+                shutil.copy2(fallback_icon, installer_icon_target)
+            except Exception as e:
+                self.log(f"Could not copy installer icon: {e}")
 
         with open(desktop_path, "w", encoding="utf-8") as f:
             f.write(self.build_handler_desktop(
@@ -944,10 +1053,8 @@ class LinuxInstallerApp:
         os.chmod(desktop_path, 0o755)
 
         if shutil.which("xdg-mime"):
-            self.try_run(["xdg-mime", "default", DESKTOP_FILE_NAME, APPIMAGE_MIME],
-                        check=False)
-            self.try_run(["xdg-mime", "default", DESKTOP_FILE_NAME, DEB_MIME],
-                        check=False)
+            self.try_run(["xdg-mime", "default", DESKTOP_FILE_NAME, APPIMAGE_MIME], check=False)
+            self.try_run(["xdg-mime", "default", DESKTOP_FILE_NAME, DEB_MIME], check=False)
 
         self.try_run(["update-desktop-database", DESKTOP_DIR], check=False)
 
@@ -965,31 +1072,33 @@ class LinuxInstallerApp:
     def unregister_as_handler(self):
         desktop_path = os.path.join(DESKTOP_DIR, DESKTOP_FILE_NAME)
         if os.path.exists(desktop_path):
-            os.remove(desktop_path)
-            self.log(f"Removed: {desktop_path}")
+            try:
+                os.remove(desktop_path)
+                self.log(f"Removed: {desktop_path}")
+            except Exception as e:
+                self.log(f"Could not remove desktop handler: {e}")
 
         for ext in [".png", ".svg", ".xpm", ".ico"]:
             installer_icon = os.path.join(ICON_DIR, f"linux-app-installer{ext}")
             if os.path.exists(installer_icon):
-                os.remove(installer_icon)
-                self.log(f"Removed: {installer_icon}")
+                try:
+                    os.remove(installer_icon)
+                    self.log(f"Removed: {installer_icon}")
+                except Exception as e:
+                    self.log(f"Could not remove icon {installer_icon}: {e}")
 
         self.try_run(["update-desktop-database", DESKTOP_DIR], check=False)
         messagebox.showinfo("Removed", "Linux App Installer registration was removed.")
-    
-    def is_handler_registered(self) -> bool:
-        """Return True if the .desktop file exists *and* the MIME defaults
-        for AppImage and DEB already point at it."""
 
+    def is_handler_registered(self) -> bool:
         desktop_path = os.path.join(DESKTOP_DIR, DESKTOP_FILE_NAME)
         if not os.path.exists(desktop_path):
             return False
 
-        if not shutil.which("xdg-mime"):         # no xdg-mime → best-effort check
+        if not shutil.which("xdg-mime"):
             return True
 
         try:
-            # Check each MIME type
             for m in (APPIMAGE_MIME, DEB_MIME):
                 out = subprocess.check_output(
                     ["xdg-mime", "query", "default", m],
@@ -1025,7 +1134,8 @@ class LinuxInstallerApp:
                 app.get("version", ""),
                 app.get("source", ""),
                 app.get("desktop_file", ""),
-                app.get("exec", "")
+                app.get("exec", ""),
+                app.get("package_name", ""),
             ]).lower()
 
             if query and query not in haystack:
@@ -1056,8 +1166,9 @@ class LinuxInstallerApp:
             f"Name: {selected.get('name', '-')}\n"
             f"Version: {selected.get('version', '-')}\n"
             f"Source: {selected.get('source', '-')}\n"
+            f"Package name: {selected.get('package_name', '-')}\n"
             f"Desktop file: {selected.get('desktop_file', '-')}\n"
-            f"Exec: {selected.get('exec', '-')}\n"
+            f"Exec / Source file: {selected.get('exec', '-')}\n"
             f"Managed by installer: {'Yes' if selected.get('managed') else 'No'}\n"
             f"Uninstall method: {selected.get('uninstall_method', '-')}"
         )
@@ -1092,11 +1203,53 @@ class LinuxInstallerApp:
             return
 
         name = app.get("name", "Unknown App")
+        uninstall_method = app.get("uninstall_method", "")
 
         if not messagebox.askyesno("Uninstall", f"Remove '{name}'?"):
             return
 
-        self.remove_installed_appimage_by_name(name)
+        if uninstall_method == "manifest_appimage":
+            self.remove_installed_appimage_by_name(name)
+            return
+
+        if uninstall_method == "system_deb":
+            package_name = app.get("package_name", "")
+            if not package_name:
+                messagebox.showerror(
+                    "Missing package name",
+                    "This DEB entry has no package name, so it cannot be removed automatically."
+                )
+                return
+
+            if shutil.which("pkexec") and shutil.which("apt"):
+                try:
+                    subprocess.Popen(["pkexec", "apt", "remove", "-y", package_name])
+                    self.log(f"Started DEB uninstall: pkexec apt remove -y {package_name}")
+
+                    manifest = [
+                        x for x in self.load_deb_manifest()
+                        if x.get("package_name") != package_name
+                    ]
+                    self.save_deb_manifest(manifest)
+                    self.refresh_installed_apps()
+
+                    messagebox.showinfo(
+                        "Started",
+                        f"Removal command started for package: {package_name}"
+                    )
+                    return
+                except Exception as e:
+                    self.log(f"DEB uninstall failed: {e}")
+                    messagebox.showerror("Uninstall failed", str(e))
+                    return
+
+            messagebox.showerror(
+                "Cannot uninstall",
+                "Required tools for DEB removal were not found."
+            )
+            return
+
+        messagebox.showerror("Unsupported", "Unknown uninstall method.")
 
     def collect_installed_apps(self):
         apps = []
@@ -1111,6 +1264,26 @@ class LinuxInstallerApp:
                 "exec": item.get("installed_appimage", ""),
                 "managed": True,
                 "uninstall_method": "manifest_appimage",
+                "package_name": "",
+            }
+            key = (app["name"], app["source"], app["desktop_file"])
+            if key not in seen:
+                apps.append(app)
+                seen.add(key)
+
+        for item in self.load_deb_manifest():
+            package_name = item.get("package_name", "")
+            actual_version = self.get_installed_deb_version(package_name) if package_name else item.get("version", "")
+
+            app = {
+                "name": item.get("name", ""),
+                "version": actual_version or item.get("version", ""),
+                "source": "DEB",
+                "desktop_file": package_name,
+                "exec": item.get("source_file", ""),
+                "managed": False,
+                "uninstall_method": "system_deb",
+                "package_name": package_name,
             }
             key = (app["name"], app["source"], app["desktop_file"])
             if key not in seen:
@@ -1149,38 +1322,70 @@ class LinuxInstallerApp:
         filtered.append(item)
         self.save_manifest(filtered)
 
+    def load_deb_manifest(self):
+        try:
+            with open(DEB_MANIFEST_FILE, "r", encoding="utf-8") as f:
+                data = json.load(f)
+                if isinstance(data, list):
+                    return data
+        except Exception:
+            pass
+        return []
+
+    def save_deb_manifest(self, data):
+        with open(DEB_MANIFEST_FILE, "w", encoding="utf-8") as f:
+            json.dump(data, f, indent=2)
+
+    def add_deb_to_manifest(self, item):
+        manifest = self.load_deb_manifest()
+        filtered = []
+
+        new_pkg = item.get("package_name", "")
+        new_name = item.get("name", "")
+
+        for existing in manifest:
+            same_pkg = new_pkg and existing.get("package_name", "") == new_pkg
+            same_name = new_name and existing.get("name", "") == new_name
+
+            if not same_pkg and not same_name:
+                filtered.append(existing)
+
+        filtered.append(item)
+        self.save_deb_manifest(filtered)
+
     # -------------------------
     # Desktop and icon helpers
     # -------------------------
 
     def build_app_desktop(self, app_name, comment, exec_path, icon_path):
+        icon_value = icon_path if icon_path else "application-x-executable"
         return f"""[Desktop Entry]
-            Version=1.0
-            Type=Application
-            Name={app_name}
-            Comment={comment}
-            Exec="{exec_path}"
-            Icon={icon_path}
-            Terminal=false
-            Categories=Utility;
-            StartupNotify=true
-            """
+Version=1.0
+Type=Application
+Name={app_name}
+Comment={comment}
+Exec="{exec_path}"
+Icon={icon_value}
+Terminal=false
+Categories=Utility;
+StartupNotify=true
+"""
 
     def build_handler_desktop(self, script_path, python_exec, icon_path):
         icon_value = icon_path if icon_path else "system-software-install"
         return f"""[Desktop Entry]
-            Version=1.0
-            Type=Application
-            Name={APP_TITLE}
-            Comment={APP_COMMENT}
-            Exec="{python_exec}" "{script_path}" %f
-            Icon={icon_value}
-            Terminal=false
-            Categories={APP_CATEGORIES}
-            MimeType={APPIMAGE_MIME};{DEB_MIME};
-            StartupNotify=true
-            NoDisplay=false
-            """
+Version=1.0
+Type=Application
+Name={APP_TITLE}
+Comment={APP_COMMENT}
+Exec="{python_exec}" "{script_path}" %f
+Icon={icon_value}
+Terminal=false
+Categories={APP_CATEGORIES}
+MimeType={APPIMAGE_MIME};{DEB_MIME};
+StartupNotify=true
+NoDisplay=false
+"""
 
     def parse_desktop_file(self, path):
         data = {}

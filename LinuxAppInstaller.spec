@@ -5,7 +5,7 @@ a = Analysis(
     ['app.py'],
     pathex=[],
     binaries=[],
-    datas=[],
+    datas=[('Linux_installer_icon.png', '.')],
     hiddenimports=[],
     hookspath=[],
     hooksconfig={},
