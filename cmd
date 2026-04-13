@@ -26,4 +26,3 @@ Terminal=false
 #make sure you download appimagetool-x86_64.AppImage
 
 ~/Applications/tools/appimagetool-x86_64.AppImage LinuxAppInstaller.AppDir
-
