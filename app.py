@@ -31,8 +31,8 @@ class LinuxInstallerApp:
     def __init__(self, root):
         self.root = root
         self.root.title(APP_TITLE)
-        self.root.geometry("1080x720")
-        self.root.minsize(960, 640)
+        self.root.geometry("1180x760")
+        self.root.minsize(1000, 680)
 
         self.selected_file = ""
         self.selected_icon = ""
@@ -122,13 +122,13 @@ class LinuxInstallerApp:
         self.pkg_var = tk.StringVar(value="Package name: -")
         self.version_var = tk.StringVar(value="Version: -")
 
-        tk.Label(info, textvariable=self.file_var, justify="left", wraplength=950, anchor="w").pack(anchor="w", fill="x")
+        tk.Label(info, textvariable=self.file_var, justify="left", wraplength=1050, anchor="w").pack(anchor="w", fill="x")
         tk.Label(info, textvariable=self.type_var, anchor="w").pack(anchor="w", pady=(8, 0))
         tk.Label(info, textvariable=self.name_var, anchor="w").pack(anchor="w", pady=(6, 0))
         tk.Label(info, textvariable=self.pkg_var, anchor="w").pack(anchor="w", pady=(6, 0))
         tk.Label(info, textvariable=self.version_var, anchor="w").pack(anchor="w", pady=(6, 0))
         tk.Label(info, textvariable=self.comment_var, anchor="w").pack(anchor="w", pady=(6, 0))
-        tk.Label(info, textvariable=self.icon_var, justify="left", wraplength=950, anchor="w").pack(anchor="w", pady=(6, 0))
+        tk.Label(info, textvariable=self.icon_var, justify="left", wraplength=1050, anchor="w").pack(anchor="w", pady=(6, 0))
 
         log_frame = tk.LabelFrame(wrapper, text="Status", padx=10, pady=10)
         log_frame.pack(fill="both", expand=True)
@@ -150,7 +150,7 @@ class LinuxInstallerApp:
 
         tk.Label(
             wrapper,
-            text="Shows apps managed or tracked by this installer.",
+            text="Shows removable applications while hiding most core system components, settings tools, drivers, and libraries.",
             fg="#444"
         ).pack(anchor="w", pady=(4, 12))
 
@@ -159,9 +159,21 @@ class LinuxInstallerApp:
 
         tk.Label(controls, text="Search:").pack(side="left")
         self.search_var = tk.StringVar()
-        search_entry = tk.Entry(controls, textvariable=self.search_var, width=40)
-        search_entry.pack(side="left", padx=(6, 10))
+        search_entry = tk.Entry(controls, textvariable=self.search_var, width=36)
+        search_entry.pack(side="left", padx=(6, 12))
         search_entry.bind("<KeyRelease>", lambda e: self.populate_installed_apps_tree())
+
+        self.source_filter_var = tk.StringVar(value="All")
+        tk.Label(controls, text="Source:").pack(side="left", padx=(4, 4))
+        source_combo = ttk.Combobox(
+            controls,
+            textvariable=self.source_filter_var,
+            values=["All", "AppImage", "DEB", "System", "Flatpak", "Snap"],
+            state="readonly",
+            width=12
+        )
+        source_combo.pack(side="left", padx=(0, 12))
+        source_combo.bind("<<ComboboxSelected>>", lambda e: self.populate_installed_apps_tree())
 
         tk.Button(
             controls,
@@ -191,8 +203,8 @@ class LinuxInstallerApp:
         self.apps_tree.column("name", width=240)
         self.apps_tree.column("version", width=110)
         self.apps_tree.column("source", width=100)
-        self.apps_tree.column("desktop", width=300)
-        self.apps_tree.column("exec", width=280)
+        self.apps_tree.column("desktop", width=340)
+        self.apps_tree.column("exec", width=300)
 
         yscroll = ttk.Scrollbar(tree_frame, orient="vertical", command=self.apps_tree.yview)
         self.apps_tree.configure(yscrollcommand=yscroll.set)
@@ -204,7 +216,7 @@ class LinuxInstallerApp:
         details.pack(fill="x", pady=(10, 0))
 
         self.selected_app_details = tk.StringVar(value="No app selected.")
-        tk.Label(details, textvariable=self.selected_app_details, justify="left", anchor="w", wraplength=980).pack(anchor="w", fill="x")
+        tk.Label(details, textvariable=self.selected_app_details, justify="left", anchor="w", wraplength=1080).pack(anchor="w", fill="x")
 
         self.apps_tree.bind("<<TreeviewSelect>>", lambda e: self.update_selected_app_details())
 
@@ -215,56 +227,63 @@ class LinuxInstallerApp:
     def show_busy_dialog(self, message="Processing..."):
         self.close_busy_dialog()
 
+        # show loader cursor on main window
         self.root.config(cursor="watch")
         self.root.update_idletasks()
 
+        # transparent input blocker
         self.busy_dialog = tk.Toplevel(self.root)
-        self.busy_dialog.title("Please wait")
-        self.busy_dialog.resizable(False, False)
+        self.busy_dialog.overrideredirect(True)
         self.busy_dialog.transient(self.root)
-        self.busy_dialog.grab_set()
-        self.busy_dialog.protocol("WM_DELETE_WINDOW", lambda: None)
 
-        width = 320
-        height = 120
-
+        # match parent window position and size
         self.root.update_idletasks()
-        root_x = self.root.winfo_rootx()
-        root_y = self.root.winfo_rooty()
-        root_width = self.root.winfo_width()
-        root_height = self.root.winfo_height()
+        x = self.root.winfo_rootx()
+        y = self.root.winfo_rooty()
+        w = self.root.winfo_width()
+        h = self.root.winfo_height()
+        self.busy_dialog.geometry(f"{w}x{h}+{x}+{y}")
 
-        x = root_x + (root_width // 2) - (width // 2)
-        y = root_y + (root_height // 2) - (height // 2)
+        # make it transparent
+        try:
+            self.busy_dialog.attributes("-alpha", 0.0)
+        except Exception:
+            self.busy_dialog.attributes("-alpha", 0.01)
 
-        self.busy_dialog.geometry(f"{width}x{height}+{x}+{y}")
+        # keep cursor visible on blocker too
+        self.busy_dialog.config(cursor="watch")
 
-        frame = tk.Frame(self.busy_dialog, padx=16, pady=16)
-        frame.pack(fill="both", expand=True)
+        # block all mouse and keyboard input
+        for sequence in (
+            "<Button-1>", "<Button-2>", "<Button-3>",
+            "<Double-Button-1>",
+            "<B1-Motion>", "<B2-Motion>", "<B3-Motion>",
+            "<MouseWheel>",
+            "<Key>",
+            "<Return>", "<space>", "<Escape>", "<Tab>"
+        ):
+            self.busy_dialog.bind(sequence, lambda e: "break")
 
-        tk.Label(frame, text=message, font=("Arial", 11)).pack(pady=(0, 12))
-
-        self.busy_bar = ttk.Progressbar(frame, mode="indeterminate", length=260)
-        self.busy_bar.pack()
-        self.busy_bar.start(10)
-
+        self.busy_dialog.lift()
+        self.busy_dialog.grab_set()
+        self.busy_dialog.focus_force()
         self.busy_dialog.update_idletasks()
+
 
     def close_busy_dialog(self):
         try:
-            if self.busy_bar:
-                self.busy_bar.stop()
-        except Exception:
-            pass
-
-        try:
             if self.busy_dialog:
-                self.busy_dialog.grab_release()
-                self.busy_dialog.destroy()
+                try:
+                    self.busy_dialog.grab_release()
+                except Exception:
+                    pass
+                try:
+                    self.busy_dialog.destroy()
+                except Exception:
+                    pass
         except Exception:
             pass
 
-        self.busy_bar = None
         self.busy_dialog = None
 
         try:
@@ -273,22 +292,42 @@ class LinuxInstallerApp:
         except Exception:
             pass
 
+
+    def show_info(self, title, message):
+        self.close_busy_dialog()
+        return messagebox.showinfo(title, message, parent=self.root)
+
+
+    def show_error(self, title, message):
+        self.close_busy_dialog()
+        return messagebox.showerror(title, message, parent=self.root)
+
+
+    def ask_yes_no(self, title, message):
+        self.close_busy_dialog()
+        return messagebox.askyesno(title, message, parent=self.root)
+
+
     def run_with_loader(self, message, func, *args, **kwargs):
         self.show_busy_dialog(message)
         try:
             self.root.update_idletasks()
-            return func(*args, **kwargs)
+            result = func(*args, **kwargs)
+            return result
         finally:
             self.close_busy_dialog()
+
 
     def run_with_loader_safe(self, message, func, *args, **kwargs):
         self.show_busy_dialog(message)
         try:
             self.root.update_idletasks()
-            return func(*args, **kwargs)
+            result = func(*args, **kwargs)
+            return result
         except Exception as e:
             self.log(f"Operation failed: {e}")
-            messagebox.showerror("Error", str(e))
+            self.close_busy_dialog()
+            self.show_error("Error", str(e))
             return None
         finally:
             self.close_busy_dialog()
@@ -414,11 +453,11 @@ class LinuxInstallerApp:
     def ensure_file_selected(self, show_error=True):
         if not self.selected_file:
             if show_error:
-                messagebox.showerror("No file selected", "Please choose a .AppImage or .deb file first.")
+                self.show_error("No file selected", "Please choose a .AppImage or .deb file first.")
             return False
         if not os.path.exists(self.selected_file):
             if show_error:
-                messagebox.showerror("Missing file", "The selected file does not exist.")
+                self.show_error("Missing file", "The selected file does not exist.")
             return False
         return True
 
@@ -437,7 +476,7 @@ class LinuxInstallerApp:
         elif file_type == "DEB package":
             self.install_deb()
         else:
-            messagebox.showerror("Unsupported", "Only .AppImage and .deb files are supported.")
+            self.show_error("Unsupported", "Only .AppImage and .deb files are supported.")
 
     # -------------------------
     # Executable handling
@@ -458,7 +497,7 @@ class LinuxInstallerApp:
         self.log(f"Working copy executable: {work_exec}")
 
         if not source_exec:
-            allow = messagebox.askyesno(
+            allow = self.ask_yes_no(
                 "AppImage not executable",
                 "This AppImage is not executable yet.\n\nDo you want Linux App Installer to add execute permission automatically?"
             )
@@ -471,7 +510,7 @@ class LinuxInstallerApp:
                 self.log(f"Made source AppImage executable: {source_path}")
             except Exception as e:
                 self.log(f"Failed to make source AppImage executable: {e}")
-                messagebox.showerror(
+                self.show_error(
                     "Permission change failed",
                     f"Could not make the original AppImage executable.\n\n{e}"
                 )
@@ -482,7 +521,7 @@ class LinuxInstallerApp:
             self.log(f"Made working AppImage executable: {working_path}")
         except Exception as e:
             self.log(f"Failed to make working AppImage executable: {e}")
-            messagebox.showerror(
+            self.show_error(
                 "Permission change failed",
                 f"Could not make the backend working copy executable.\n\n{e}"
             )
@@ -564,7 +603,7 @@ class LinuxInstallerApp:
             cmp_result = self.compare_versions(new_version, existing_version)
 
             if cmp_result == 0:
-                answer = messagebox.askyesno(
+                answer = self.ask_yes_no(
                     f"{source_label} already installed",
                     f"'{app_name}' version '{new_version}' is already installed.\n\n"
                     "Do you want to reinstall it?"
@@ -572,7 +611,7 @@ class LinuxInstallerApp:
                 return "reinstall" if answer else "cancel"
 
             if cmp_result > 0:
-                answer = messagebox.askyesno(
+                answer = self.ask_yes_no(
                     "Update available",
                     f"'{app_name}' is already installed.\n\n"
                     f"Installed version: {existing_version}\n"
@@ -582,7 +621,7 @@ class LinuxInstallerApp:
                 return "upgrade" if answer else "cancel"
 
             if cmp_result < 0:
-                answer = messagebox.askyesno(
+                answer = self.ask_yes_no(
                     "Older version detected",
                     f"'{app_name}' is already installed.\n\n"
                     f"Installed version: {existing_version}\n"
@@ -591,7 +630,7 @@ class LinuxInstallerApp:
                 )
                 return "downgrade" if answer else "cancel"
 
-        answer = messagebox.askyesno(
+        answer = self.ask_yes_no(
             f"{source_label} already installed",
             f"'{app_name}' is already installed.\n\n"
             f"Installed version: {existing_version or '-'}\n"
@@ -823,7 +862,7 @@ class LinuxInstallerApp:
         if not self.ensure_file_selected():
             return
         if self.detect_file_type(self.selected_file) != "AppImage":
-            messagebox.showerror("Wrong file type", "Please select an .AppImage file.")
+            self.show_error("Wrong file type", "Please select an .AppImage file.")
             return
 
         self.analyze_selected_file()
@@ -906,13 +945,13 @@ class LinuxInstallerApp:
         else:
             msg = f"{app_name} was replaced."
 
-        messagebox.showinfo("Installed", msg)
+        self.show_info("Installed", msg)
 
     def install_deb(self):
         if not self.ensure_file_selected():
             return
         if self.detect_file_type(self.selected_file) != "DEB package":
-            messagebox.showerror("Wrong file type", "Please select a .deb file.")
+            self.show_error("Wrong file type", "Please select a .deb file.")
             return
 
         deb_path = os.path.abspath(self.selected_file)
@@ -954,17 +993,17 @@ class LinuxInstallerApp:
                 self.log(f"Started DEB install for: {deb_path}")
                 self.log("Using primary method: dpkg -i ... ; apt-get install -f -y")
                 self.refresh_installed_apps()
-                messagebox.showinfo(
+                self.show_info(
                     "Started",
                     f"{action.capitalize()} started using dpkg + apt-get fix."
                 )
                 return
             except Exception as e:
                 self.log(f"Primary DEB install failed: {e}")
-                messagebox.showerror("Install failed", str(e))
+                self.show_error("Install failed", str(e))
                 return
 
-        messagebox.showerror(
+        self.show_error(
             "Missing tools",
             "This system does not have the required pkexec/dpkg tools."
         )
@@ -1012,9 +1051,9 @@ class LinuxInstallerApp:
         self.refresh_installed_apps()
 
         if removed:
-            messagebox.showinfo("Uninstalled", f"{app_name} was removed.")
+            self.show_info("Uninstalled", f"{app_name} was removed.")
         else:
-            messagebox.showinfo("Nothing found", "No installed files were found for that app.")
+            self.show_info("Nothing found", "No installed files were found for that app.")
 
     # -------------------------
     # Registration
@@ -1063,7 +1102,7 @@ class LinuxInstallerApp:
             self.log(f"Installer icon copied to: {installer_icon_target}")
         self.log("Associated Linux App Installer with AppImage and DEB MIME types.")
 
-        messagebox.showinfo(
+        self.show_info(
             "Registered",
             "Linux App Installer was registered.\n\nIts app-menu icon now uses "
             "your custom icon, and that same icon is the fallback for installed apps."
@@ -1088,7 +1127,7 @@ class LinuxInstallerApp:
                     self.log(f"Could not remove icon {installer_icon}: {e}")
 
         self.try_run(["update-desktop-database", DESKTOP_DIR], check=False)
-        messagebox.showinfo("Removed", "Linux App Installer registration was removed.")
+        self.show_info("Removed", "Linux App Installer registration was removed.")
 
     def is_handler_registered(self) -> bool:
         desktop_path = os.path.join(DESKTOP_DIR, DESKTOP_FILE_NAME)
@@ -1120,9 +1159,11 @@ class LinuxInstallerApp:
         self.installed_apps_cache = self.collect_installed_apps()
         self.populate_installed_apps_tree()
         self.update_selected_app_details()
+        self.log(f"Installed apps loaded: {len(self.installed_apps_cache)}")
 
     def populate_installed_apps_tree(self):
         query = self.search_var.get().strip().lower() if hasattr(self, "search_var") else ""
+        source_filter = self.source_filter_var.get().strip() if hasattr(self, "source_filter_var") else "All"
 
         for item in self.apps_tree.get_children():
             self.apps_tree.delete(item)
@@ -1139,6 +1180,8 @@ class LinuxInstallerApp:
             ]).lower()
 
             if query and query not in haystack:
+                continue
+            if source_filter != "All" and app.get("source", "") != source_filter:
                 continue
             filtered.append(app)
 
@@ -1199,13 +1242,14 @@ class LinuxInstallerApp:
     def uninstall_selected_installed_app(self):
         app = self.get_selected_installed_app()
         if not app:
-            messagebox.showerror("No selection", "Please select an installed app first.")
+            self.show_error("No selection", "Please select an installed app first.")
             return
 
         name = app.get("name", "Unknown App")
         uninstall_method = app.get("uninstall_method", "")
+        package_name = app.get("package_name", "")
 
-        if not messagebox.askyesno("Uninstall", f"Remove '{name}'?"):
+        if not self.ask_yes_no("Uninstall", f"Remove '{name}'?"):
             return
 
         if uninstall_method == "manifest_appimage":
@@ -1213,11 +1257,10 @@ class LinuxInstallerApp:
             return
 
         if uninstall_method == "system_deb":
-            package_name = app.get("package_name", "")
             if not package_name:
-                messagebox.showerror(
+                self.show_error(
                     "Missing package name",
-                    "This DEB entry has no package name, so it cannot be removed automatically."
+                    "This package entry has no package name, so it cannot be removed automatically."
                 )
                 return
 
@@ -1233,23 +1276,63 @@ class LinuxInstallerApp:
                     self.save_deb_manifest(manifest)
                     self.refresh_installed_apps()
 
-                    messagebox.showinfo(
+                    self.show_info(
                         "Started",
                         f"Removal command started for package: {package_name}"
                     )
                     return
                 except Exception as e:
                     self.log(f"DEB uninstall failed: {e}")
-                    messagebox.showerror("Uninstall failed", str(e))
+                    self.show_error("Uninstall failed", str(e))
                     return
 
-            messagebox.showerror(
+            self.show_error(
                 "Cannot uninstall",
                 "Required tools for DEB removal were not found."
             )
             return
 
-        messagebox.showerror("Unsupported", "Unknown uninstall method.")
+        if uninstall_method == "flatpak":
+            if not package_name:
+                self.show_error("Missing app id", "This Flatpak entry has no app id.")
+                return
+
+            if shutil.which("flatpak"):
+                try:
+                    subprocess.Popen(["flatpak", "uninstall", "-y", package_name])
+                    self.log(f"Started Flatpak uninstall: flatpak uninstall -y {package_name}")
+                    self.refresh_installed_apps()
+                    self.show_info("Started", f"Flatpak uninstall started for: {package_name}")
+                    return
+                except Exception as e:
+                    self.log(f"Flatpak uninstall failed: {e}")
+                    self.show_error("Uninstall failed", str(e))
+                    return
+
+            self.show_error("Cannot uninstall", "Flatpak is not available on this system.")
+            return
+
+        if uninstall_method == "snap":
+            if not package_name:
+                self.show_error("Missing package name", "This Snap entry has no package name.")
+                return
+
+            if shutil.which("pkexec") and shutil.which("snap"):
+                try:
+                    subprocess.Popen(["pkexec", "snap", "remove", package_name])
+                    self.log(f"Started Snap uninstall: pkexec snap remove {package_name}")
+                    self.refresh_installed_apps()
+                    self.show_info("Started", f"Snap uninstall started for: {package_name}")
+                    return
+                except Exception as e:
+                    self.log(f"Snap uninstall failed: {e}")
+                    self.show_error("Uninstall failed", str(e))
+                    return
+
+            self.show_error("Cannot uninstall", "Snap is not available or pkexec is missing.")
+            return
+
+        self.show_error("Unsupported", "Unknown uninstall method.")
 
     def collect_installed_apps(self):
         apps = []
@@ -1276,7 +1359,7 @@ class LinuxInstallerApp:
             actual_version = self.get_installed_deb_version(package_name) if package_name else item.get("version", "")
 
             app = {
-                "name": item.get("name", ""),
+                "name": item.get("name", "") or package_name,
                 "version": actual_version or item.get("version", ""),
                 "source": "DEB",
                 "desktop_file": package_name,
@@ -1290,7 +1373,439 @@ class LinuxInstallerApp:
                 apps.append(app)
                 seen.add(key)
 
+        for app in self.get_installed_desktop_apps():
+            key = (app["name"], app["source"], app["desktop_file"])
+            if key not in seen:
+                apps.append(app)
+                seen.add(key)
+
+        for app in self.get_flatpak_apps():
+            key = (app["name"], app["source"], app["desktop_file"])
+            if key not in seen:
+                apps.append(app)
+                seen.add(key)
+
+        for app in self.get_snap_apps():
+            key = (app["name"], app["source"], app["desktop_file"])
+            if key not in seen:
+                apps.append(app)
+                seen.add(key)
+
         apps.sort(key=lambda a: (a.get("name", "").lower(), a.get("source", "").lower()))
+        return apps
+
+    def get_installed_desktop_apps(self):
+        apps = []
+        desktop_dirs = [
+            "/usr/share/applications",
+            "/usr/local/share/applications",
+            os.path.expanduser("~/.local/share/applications"),
+        ]
+
+        seen_pkgs = set()
+
+        for base_dir in desktop_dirs:
+            if not os.path.isdir(base_dir):
+                continue
+
+            try:
+                desktop_files = sorted(
+                    os.path.join(base_dir, name)
+                    for name in os.listdir(base_dir)
+                    if name.endswith(".desktop")
+                )
+            except Exception:
+                continue
+
+            for desktop_path in desktop_files:
+                info = self.parse_desktop_file(desktop_path)
+                if not self.is_desktop_app_visible(info, desktop_path):
+                    continue
+
+                name = (info.get("Name", "") or "").strip()
+                exec_cmd = (info.get("Exec", "") or "").strip()
+                if not name or not exec_cmd:
+                    continue
+
+                if self.is_excluded_app_name(name):
+                    continue
+
+                package_name = self.package_name_from_desktop_file(desktop_path, exec_cmd)
+                if not package_name:
+                    continue
+
+                if package_name in seen_pkgs:
+                    continue
+
+                if self.is_system_package(package_name):
+                    continue
+
+                version = self.get_installed_deb_version(package_name)
+                seen_pkgs.add(package_name)
+
+                apps.append({
+                    "name": name,
+                    "version": version,
+                    "source": "System",
+                    "desktop_file": desktop_path,
+                    "exec": exec_cmd,
+                    "managed": False,
+                    "uninstall_method": "system_deb",
+                    "package_name": package_name,
+                })
+
+        return apps
+
+    def is_desktop_app_visible(self, info, desktop_path):
+        no_display = info.get("NoDisplay", "").strip().lower()
+        if no_display == "true":
+            return False
+
+        hidden = info.get("Hidden", "").strip().lower()
+        if hidden == "true":
+            return False
+
+        exec_cmd = info.get("Exec", "").strip()
+        name = info.get("Name", "").strip()
+        if not exec_cmd or not name:
+            return False
+
+        low_path = desktop_path.lower()
+        low_exec = exec_cmd.lower()
+        low_name = name.lower()
+
+        blocked_path_keywords = [
+            "settings",
+            "driver",
+            "firmware",
+            "gnome-control-center",
+            "xfce4-settings",
+            "mate-control-center",
+            "system-config",
+        ]
+        if any(word in low_path for word in blocked_path_keywords):
+            return False
+
+        blocked_exec_keywords = [
+            "gnome-control-center",
+            "xfce4-settings-manager",
+            "kcmshell",
+            "software-properties",
+            "update-manager",
+            "ubuntu-drivers",
+            "nm-connection-editor",
+            "blueman-manager",
+        ]
+        if any(word in low_exec for word in blocked_exec_keywords):
+            return False
+
+        blocked_name_keywords = [
+            "settings",
+            "additional drivers",
+            "driver manager",
+            "software updater",
+            "update manager",
+            "session and startup",
+            "power manager",
+            "default applications",
+            "mime type editor",
+        ]
+        if any(word in low_name for word in blocked_name_keywords):
+            return False
+
+        return True
+
+    def is_excluded_app_name(self, name):
+        low_name = (name or "").strip().lower()
+        exact_names = {
+            "settings",
+            "about xfce",
+            "panel",
+            "appearance",
+            "notifications",
+            "display",
+            "mouse and touchpad",
+            "keyboard",
+            "printers",
+            "removable drives and media",
+            "screensaver",
+            "session and startup",
+            "window manager tweaks",
+            "workspaces",
+            "mime type editor",
+            "preferred applications",
+            "power manager",
+            "accessibility",
+            "users and groups",
+            "login window",
+            "language support",
+        }
+        if low_name in exact_names:
+            return True
+
+        fragments = [
+            "driver",
+            "firmware",
+            "settings",
+            "control center",
+            "preferences",
+            "system config",
+        ]
+        return any(fragment in low_name for fragment in fragments)
+
+    def package_name_from_desktop_file(self, desktop_path, exec_cmd):
+        package_name = self.query_package_for_path(desktop_path)
+        if package_name:
+            return package_name
+
+        binary = self.extract_binary_from_exec(exec_cmd)
+        if not binary:
+            return ""
+
+        resolved = shutil.which(binary)
+        if resolved:
+            package_name = self.query_package_for_path(resolved)
+            if package_name:
+                return package_name
+
+        package_name = self.guess_package_from_desktop_filename(desktop_path)
+        if package_name and self.get_installed_deb_version(package_name):
+            return package_name
+
+        package_name = self.guess_package_from_binary(binary)
+        if package_name and self.get_installed_deb_version(package_name):
+            return package_name
+
+        return ""
+
+    def extract_binary_from_exec(self, exec_cmd):
+        if not exec_cmd:
+            return ""
+
+        cleaned = re.sub(r"\s+%[fFuUdDnNickvm]", "", exec_cmd).strip()
+        if not cleaned:
+            return ""
+
+        if cleaned.startswith('"'):
+            match = re.match(r'^"([^"]+)"', cleaned)
+            if match:
+                binary = match.group(1)
+            else:
+                binary = cleaned
+        else:
+            binary = cleaned.split()[0]
+
+        binary = os.path.basename(binary)
+        binary = binary.strip()
+        return binary
+
+    def query_package_for_path(self, path):
+        if not path or not shutil.which("dpkg-query"):
+            return ""
+
+        try:
+            output = subprocess.check_output(
+                ["dpkg-query", "-S", path],
+                text=True,
+                stderr=subprocess.DEVNULL
+            ).strip()
+            if not output:
+                return ""
+
+            first = output.splitlines()[0]
+            pkg_part = first.split(":", 1)[0].strip()
+            if "," in pkg_part:
+                pkg_part = pkg_part.split(",", 1)[0].strip()
+            if pkg_part.startswith("diversion by"):
+                return ""
+            return pkg_part
+        except Exception:
+            return ""
+
+    def guess_package_from_desktop_filename(self, desktop_path):
+        base = os.path.splitext(os.path.basename(desktop_path))[0].strip().lower()
+        candidates = [base]
+
+        if "." in base:
+            candidates.append(base.split(".", 1)[0])
+        if "-" in base:
+            candidates.append(base.split("-", 1)[0])
+
+        for candidate in candidates:
+            if candidate and self.get_installed_deb_version(candidate):
+                return candidate
+        return ""
+
+    def guess_package_from_binary(self, binary):
+        candidate = (binary or "").strip().lower()
+        if candidate and self.get_installed_deb_version(candidate):
+            return candidate
+        return ""
+
+    def is_system_package(self, package_name):
+        if not package_name:
+            return True
+
+        low_pkg = package_name.lower()
+
+        blocked_prefixes = (
+            "lib",
+            "linux-",
+            "linux",
+            "xserver-",
+            "xorg",
+            "firmware-",
+            "mesa-",
+            "gir1.",
+            "fonts-",
+            "language-pack-",
+            "hunspell-",
+            "aspell-",
+            "mythes-",
+            "hyphen-",
+            "accountsservice",
+            "systemd",
+            "network-manager",
+            "pulseaudio",
+            "pipewire",
+            "bluez",
+            "cups",
+            "printer-driver-",
+            "ppp",
+            "sudo",
+            "grub",
+            "init",
+            "dbus",
+        )
+        if low_pkg.startswith(blocked_prefixes):
+            return True
+
+        blocked_contains = [
+            "driver",
+            "drivers",
+            "firmware",
+            "settings",
+            "control-center",
+            "desktop-base",
+            "indicator",
+            "policykit",
+            "polkit",
+            "session",
+            "greeter",
+            "display-manager",
+            "xfce4-settings",
+            "gnome-control-center",
+            "ubuntu-drivers",
+        ]
+        if any(part in low_pkg for part in blocked_contains):
+            return True
+
+        priority = self.get_package_priority(package_name)
+        if priority in {"required", "important", "standard"}:
+            return True
+
+        return False
+
+    def get_package_priority(self, package_name):
+        if not package_name or not shutil.which("dpkg-query"):
+            return ""
+
+        try:
+            return subprocess.check_output(
+                ["dpkg-query", "-W", "-f=${Priority}", package_name],
+                text=True,
+                stderr=subprocess.DEVNULL
+            ).strip().lower()
+        except Exception:
+            return ""
+
+    def get_flatpak_apps(self):
+        apps = []
+        if not shutil.which("flatpak"):
+            return apps
+
+        try:
+            output = subprocess.check_output(
+                ["flatpak", "list", "--app", "--columns=application,name,version"],
+                text=True,
+                stderr=subprocess.DEVNULL
+            )
+        except Exception as e:
+            self.log(f"Could not read Flatpak apps: {e}")
+            return apps
+
+        for line in output.splitlines():
+            line = line.strip()
+            if not line:
+                continue
+            parts = line.split("\t")
+            if len(parts) < 2:
+                continue
+
+            app_id = parts[0].strip()
+            name = parts[1].strip() if len(parts) > 1 else app_id
+            version = parts[2].strip() if len(parts) > 2 else ""
+
+            if self.is_excluded_app_name(name):
+                continue
+
+            apps.append({
+                "name": name or app_id,
+                "version": version,
+                "source": "Flatpak",
+                "desktop_file": app_id,
+                "exec": app_id,
+                "managed": False,
+                "uninstall_method": "flatpak",
+                "package_name": app_id,
+            })
+
+        return apps
+
+    def get_snap_apps(self):
+        apps = []
+        if not shutil.which("snap"):
+            return apps
+
+        try:
+            output = subprocess.check_output(
+                ["snap", "list"],
+                text=True,
+                stderr=subprocess.DEVNULL
+            )
+        except Exception as e:
+            self.log(f"Could not read Snap apps: {e}")
+            return apps
+
+        lines = output.splitlines()
+        if len(lines) <= 1:
+            return apps
+
+        for line in lines[1:]:
+            line = line.strip()
+            if not line:
+                continue
+            parts = re.split(r"\s+", line)
+            if len(parts) < 2:
+                continue
+
+            name = parts[0].strip()
+            version = parts[1].strip() if len(parts) > 1 else ""
+
+            if self.is_system_package(name) or self.is_excluded_app_name(name):
+                continue
+
+            apps.append({
+                "name": name,
+                "version": version,
+                "source": "Snap",
+                "desktop_file": name,
+                "exec": name,
+                "managed": False,
+                "uninstall_method": "snap",
+                "package_name": name,
+            })
+
         return apps
 
     # -------------------------
@@ -1364,7 +1879,7 @@ Version=1.0
 Type=Application
 Name={app_name}
 Comment={comment}
-Exec="{exec_path}"
+Exec=\"{exec_path}\"
 Icon={icon_value}
 Terminal=false
 Categories=Utility;
@@ -1378,7 +1893,7 @@ Version=1.0
 Type=Application
 Name={APP_TITLE}
 Comment={APP_COMMENT}
-Exec="{python_exec}" "{script_path}" %f
+Exec=\"{python_exec}\" \"{script_path}\" %f
 Icon={icon_value}
 Terminal=false
 Categories={APP_CATEGORIES}
@@ -1396,7 +1911,7 @@ NoDisplay=false
                     if not line or line.startswith("#") or "=" not in line:
                         continue
                     key, value = line.split("=", 1)
-                    if key in ("Name", "Comment", "Icon", "Exec", "NoDisplay"):
+                    if key in ("Name", "Comment", "Icon", "Exec", "NoDisplay", "Hidden"):
                         data[key] = value.strip()
         except Exception:
             pass
